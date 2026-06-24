@@ -281,6 +281,25 @@ export class StateRoute {
         app.get('/state/schedule/:id', (req, res) => {
             res.status(200).send(state.schedules.getItemById(parseInt(req.params.id, 10)).get());
         });
+        app.put('/state/schedule/setDisabled', async (req, res, next) => {
+            try {
+                let id = parseInt(req.body.id, 10);
+                if (isNaN(id)) throw new ServiceParameterError(`Schedule id not supplied`, '/state/schedule/setDisabled', 'id', req.body.id);
+                let disabled = utils.makeBool(typeof req.body.disabled !== 'undefined' ? req.body.disabled : req.body.state);
+                let sched = sys.schedules.getItemById(id);
+                let ssched = state.schedules.getItemById(id);
+                let ruleState = config.getSection('web.ruleState', { scheduleDisables: {} }) || {};
+                if (ruleState.scheduleDisables) delete ruleState.scheduleDisables[String(id)];
+                config.setSection('web.ruleState', ruleState);
+                sched.disabled = disabled;
+                ssched.disabled = disabled;
+                ssched.recalculate(true);
+                ssched.emitEquipmentChange();
+                await config.updateAsync();
+                return res.status(200).send(ssched.getExtended());
+            }
+            catch (err) { next(err); }
+        });
         app.get('/state/circuitGroup/:id', (req, res) => {
             res.status(200).send(state.circuitGroups.getItemById(parseInt(req.params.id, 10)).get());
         });
@@ -297,7 +316,24 @@ export class StateRoute {
                 // that circuits would have more than 2 states.  Not true for other equipment but certainly true for individual circuits/features/groups.
                 let isOn = utils.makeBool(typeof req.body.isOn !== 'undefined' ? req.body.isOn : req.body.state);
                 //state.circuits.setCircuitState(parseInt(req.body.id, 10), utils.makeBool(req.body.state));
+                let current = state.circuits.getInterfaceById(parseInt(req.body.id, 10));
+                if ((isOn && current.lockoutOn) || (!isOn && current.lockoutOff)) {
+                    return res.status(423).send({ message: `Circuit or feature ${req.body.id} is locked.` });
+                }
                 let cstate = await sys.board.circuits.setCircuitStateAsync(parseInt(req.body.id, 10), isOn);
+                return res.status(200).send(cstate.get(true));
+            }
+            catch (err) { next(err); }
+        });
+        app.put('/state/circuit/setLockout', async (req, res, next) => {
+            try {
+                let id = parseInt(req.body.id, 10);
+                if (isNaN(id)) throw new ServiceParameterError(`Circuit or feature id not supplied`, '/state/circuit/setLockout', 'id', req.body.id);
+                let locked = utils.makeBool(typeof req.body.locked !== 'undefined' ? req.body.locked : req.body.state);
+                let cstate = state.circuits.getInterfaceById(id);
+                cstate.lockoutOn = locked;
+                cstate.lockoutOff = locked;
+                cstate.emitEquipmentChange();
                 return res.status(200).send(cstate.get(true));
             }
             catch (err) { next(err); }

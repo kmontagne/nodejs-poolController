@@ -573,6 +573,8 @@ export interface ICircuitState {
     color?: { red: number; green: number; blue: number };
     startDelay?: boolean;
     stopDelay?: boolean;
+    lockoutOn?: boolean;
+    lockoutOff?: boolean;
     manualPriorityActive?: boolean;
     dataName?: string;
 }
@@ -2009,6 +2011,10 @@ export class FeatureState extends EqState implements ICircuitState {
     public set freezeProtect(val: boolean) { this.setDataVal('freezeProtect', val); }
     public get isActive(): boolean { return this.data.isActive; }
     public set isActive(val: boolean) { this.setDataVal('isActive', val); }
+    public get lockoutOn(): boolean { return this.data.lockoutOn; }
+    public set lockoutOn(val: boolean) { this.setDataVal('lockoutOn', val); }
+    public get lockoutOff(): boolean { return this.data.lockoutOff; }
+    public set lockoutOff(val: boolean) { this.setDataVal('lockoutOff', val); }
     public get manualPriorityActive(): boolean { return this.data.manualPriorityActive; }
     public set manualPriorityActive(val: boolean) { this.setDataVal('manualPriorityActive', val); }
 }

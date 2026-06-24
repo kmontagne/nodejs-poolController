@@ -83,6 +83,13 @@
       }
     },
     "services": {},
+    "rules": {
+      "enabled": true,
+      "groups": []
+    },
+    "ruleState": {
+      "scheduleDisables": {}
+    },
     "interfaces": {
       "smartThings": {
         "name": "SmartThings",

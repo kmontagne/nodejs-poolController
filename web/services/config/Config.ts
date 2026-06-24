@@ -29,6 +29,7 @@ import { state } from "../../../controller/State";
 import { stopPacketCaptureAsync, startPacketCapture } from '../../../app';
 import { conn } from "../../../controller/comms/Comms";
 import { webApp, BackupFile, RestoreFile } from "../../Server";
+import { ruleEngine } from "../rules/RuleEngine";
 import { release } from "os";
 import { ScreenLogicComms, sl } from "../../../controller/comms/ScreenLogic";
 import { IntelliCenterWSComms, icws } from "../../../controller/comms/IntelliCenterWS";
@@ -157,6 +158,26 @@ export class ConfigRoute {
             let groups = typeof req.query.features === 'undefined' || utils.makeBool(req.query.groups);
             let virtual = typeof req.query.virtual === 'undefined' || utils.makeBool(req.query.virtual);
             return res.status(200).send(sys.board.circuits.getCircuitReferences(circuits, features, virtual, groups));
+        });
+        app.get('/config/rules', (req, res) => {
+            return res.status(200).send(ruleEngine.getConfig());
+        });
+        app.get('/config/rules/status', (req, res) => {
+            return res.status(200).send(ruleEngine.getStatus());
+        });
+        app.put('/config/rules', async (req, res, next) => {
+            try {
+                const rules = ruleEngine.setConfig(req.body);
+                await config.updateAsync();
+                return res.status(200).send(rules);
+            }
+            catch (err) { next(err); }
+        });
+        app.post('/config/rules/evaluate', async (req, res, next) => {
+            try {
+                return res.status(200).send(await ruleEngine.evaluateNow('api'));
+            }
+            catch (err) { next(err); }
         });
 
         /******* CONFIGURATION PICK LISTS/REFERENCES and VALIDATION PARAMETERS *********/
@@ -979,6 +1000,9 @@ export class ConfigRoute {
         });
         app.put('/config/schedule', async (req, res, next) => {
             try {
+                let ruleState = config.getSection('web.ruleState', { scheduleDisables: {} }) || {};
+                if (ruleState.scheduleDisables && typeof req.body.id !== 'undefined') delete ruleState.scheduleDisables[String(req.body.id)];
+                config.setSection('web.ruleState', ruleState);
                 let sched = await sys.board.schedules.setScheduleAsync(req.body);
                 return res.status(200).send((sched as Schedule).get(true));
             }

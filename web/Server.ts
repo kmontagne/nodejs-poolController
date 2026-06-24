@@ -44,6 +44,7 @@ import { ConfigSocket } from "./services/config/ConfigSocket";
 import { StateRoute } from "./services/state/State";
 import { StateSocket } from "./services/state/StateSocket";
 import { UtilitiesRoute } from "./services/utilities/Utilities";
+import { ruleEngine } from "./services/rules/RuleEngine";
 import express = require('express');
 import extend = require("extend");
 import { setTimeout as setTimeoutSync } from 'timers';
@@ -144,6 +145,7 @@ export class WebServer {
         } catch (err) { logger.error(`Error initializing Interface servers ${err.message}`); }
     }
     public emitToClients(evt: string, ...data: any) {
+        ruleEngine.handleEvent(evt);
         for (let i = 0; i < this._servers.length; i++) {
             this._servers[i].emitToClients(evt, ...data);
         }
