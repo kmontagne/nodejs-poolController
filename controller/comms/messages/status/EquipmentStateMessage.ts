@@ -104,11 +104,17 @@ export class EquipmentStateMessage {
         // (same convention IntelliTouch used for the `[1, N]` family above).  Observed so far:
         //   [3, 2] = v3.004+ i8PS / i10PS personality card only
         //   [3, 3] = v3.008 i10D personality card + i10X expansion panels (Discussion #1171 / ISSUE-081)
-        // No IntelliTouch variant has ever reported model1=3, so `model1 === 3` is a safe
-        // single-check marker for IntelliCenter v3 regardless of which panel variant byte 28 carries.
+        // EasyTouch ET24P ALSO reports model1=3 (with model2 in {13,14}; see
+        // EasyTouchBoard.expansionBoards), and IntelliTouch reuses model2 in {0..5}, so
+        // model1=3 alone is NOT a safe IntelliCenter-v3 marker.  Disambiguate by requiring
+        // BOTH that model2 is a known v3 personality byte ({2,3} above) AND header[1]===1
+        // (IntelliCenter uses header[1]=1; Touch systems use other values, e.g. 18).
+        // This rejects EasyTouch ([3,13]/[3,14]) while preserving the #1171 / ISSUE-081
+        // fix for v3.008 i10D + i10X ([3,3]).  If a future v3 personality appears, add its
+        // model2 byte to the set below (and to the variant table at lines 105-106).
         if ((model2 === 0 && (model1 === 23 || model1 >= 40)) ||
             (model2 === 2 && model1 == 0 && msg.header[1] === 1) ||
-            (model1 === 3 && msg.header[1] === 1)) {
+            (model1 === 3 && (model2 === 2 || model2 === 3) && msg.header[1] === 1)) {
             state.equipment.controllerType = 'intellicenter';
             sys.board.modulesAcquired = false;
             sys.controllerType = ControllerType.IntelliCenter;
@@ -759,6 +765,10 @@ export class EquipmentStateMessage {
                 msg.isProcessed = true;
                 break;
             }
+            case 171: {
+                EquipmentStateMessage.processDimmerLevel(msg);
+                break;
+            }
             case 197: {
                 // request for date/time on *Touch.  Use this as an indicator
                 // that SL has requested config and update lastUpdated date/time
@@ -995,6 +1005,19 @@ export class EquipmentStateMessage {
         else if (valveDelay > 0) state.delay = 36;
         else if (freezeDelay > 0) state.delay = 38;
         else state.delay = 0;
+    }
+    private static processDimmerLevel(msg: Inbound) {
+        let circuitId = msg.extractPayloadByte(0);
+        let encoded = msg.extractPayloadByte(1);
+        let level = encoded > 0 ? (encoded * 10) + 30 : 0;
+        let circuit = sys.circuits.getItemById(circuitId);
+        let cstate = state.circuits.getItemById(circuitId);
+        if (circuit.isActive !== false) {
+            circuit.level = level;
+            cstate.level = level;
+            state.emitEquipmentChanges();
+        }
+        msg.isProcessed = true;
     }
     private static processCircuitState(msg: Inbound) {
         // The way this works is that there is one byte per 8 circuits for a total of 5 bytes or 40 circuits.  The
