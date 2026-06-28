@@ -2,6 +2,7 @@ import { config } from "../../../config/Config";
 import { logger } from "../../../logger/Logger";
 import { sys } from "../../../controller/Equipment";
 import { state } from "../../../controller/State";
+import { tempHistory } from "../state/TempHistory";
 
 type RuleOperator = '>' | '>=' | '<' | '<=' | '===' | '!==' | 'isTrue' | 'isFalse';
 type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'log' | 'circuitLock' | 'featureLock';
@@ -70,7 +71,7 @@ class RuleEngine {
     private _delayedActions = new Map<string, NodeJS.Timeout>();
     private _transitionTimers = new Map<string, NodeJS.Timeout>();
     private _ruleStableStates = new Map<string, boolean>();
-    private readonly _events = ['temps', 'body', 'bodyTempState', 'circuit', 'feature', 'schedule', 'controller'];
+    private readonly _events = ['temps', 'body', 'bodyTempState', 'circuit', 'feature', 'schedule', 'controller', 'weather'];
 
     public getConfig(): RuleConfig {
         return this.normalizeConfig(config.getSection('web.rules', { enabled: true, groups: [] }));
@@ -215,6 +216,9 @@ class RuleEngine {
 
             if (stableState === matched) {
                 this.cancelTransition(key);
+                if (this.actionsNeedRun(group, rule, matched)) {
+                    await this.runActionsForState(group, rule, matched, reason);
+                }
                 return;
             }
             if (pending && pendingState === matched) return;
@@ -332,6 +336,33 @@ class RuleEngine {
         if (action.type === 'log') {
             logger.info(`Rule "${rule.name}": ${action.message || 'log action'} (${reason})`);
         }
+    }
+
+    private actionsNeedRun(group: RuleGroup, rule: RuleDefinition, matched: boolean): boolean {
+        const actions = matched ? rule.actions : rule.otherwiseActions;
+        return actions.some(action => this.actionNeedsRun(group, rule, action));
+    }
+
+    private actionNeedsRun(group: RuleGroup, rule: RuleDefinition, action: RuleAction): boolean {
+        if (action.type === 'log') return false;
+        const desired = this.resolveActionState(action);
+        const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
+        return ids.some(id => {
+            if (!id || isNaN(id)) return false;
+            if (action.type === 'setCircuit') return state.circuits.getItemById(id).isOn !== desired;
+            if (action.type === 'setFeature') return state.features.getItemById(id).isOn !== desired;
+            if (action.type === 'setScheduleDisabled') {
+                const sched = sys.schedules.getItemById(id);
+                const owner = this.scheduleOwnerKey(group, rule);
+                const entry = this.getScheduleDisableEntry(this.getRuntimeState(), id);
+                return desired ? sched.disabled !== true || entry.owners.indexOf(owner) === -1 : entry.owners.indexOf(owner) !== -1;
+            }
+            if (action.type === 'circuitLock' || action.type === 'featureLock') {
+                const cstate = state.circuits.getInterfaceById(id);
+                return cstate.lockoutOn !== desired || cstate.lockoutOff !== desired;
+            }
+            return false;
+        });
     }
 
     private async setCircuitLockout(id: number, locked: boolean, ruleName: string, reason: string) {
@@ -493,6 +524,7 @@ class RuleEngine {
             case 'bodyTemp': return body.temp;
             case 'solarTemp': return state.temps.solar;
             case 'airTemp': return state.temps.air;
+            case 'dewPoint': return tempHistory.latestDewPoint;
             case 'poolSolarDelta': return this.delta(state.temps.bodies.getItemById(1).temp, state.temps.solar);
             case 'spaSolarDelta': return this.delta(state.temps.bodies.getItemById(2).temp, state.temps.solar);
             case 'bodySolarDelta': return this.delta(body.temp, state.temps.solar);

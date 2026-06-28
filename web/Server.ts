@@ -98,6 +98,7 @@ export class WebServer {
                 }
             }
             this.initInterfaces(cfg.interfaces);
+            tempHistory.onDewPointChange(() => ruleEngine.handleEvent('weather'));
             tempHistory.start();
 
         } catch (err) { logger.error(`Error initializing web server ${err.message}`) }
