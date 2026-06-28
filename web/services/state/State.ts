@@ -25,6 +25,7 @@ import { logger } from "../../../logger/Logger";
 import { DataLogger } from "../../../logger/DataLogger";
 import { conn } from "../../../controller/comms/Comms";
 import { config } from "../../../config/Config";
+import { tempHistory } from "./TempHistory";
 
 import { ServiceParameterError } from "../../../controller/Errors";
 
@@ -72,6 +73,21 @@ export class StateRoute {
                     }
                 }
                 res.status(200).send(sport);
+            }
+            catch (err) { next(err); }
+        });
+        app.get('/state/tempHistory', async (req, res, next) => {
+            try {
+                const start = typeof req.query.start === 'undefined' ? undefined : String(req.query.start);
+                const end = typeof req.query.end === 'undefined' ? undefined : String(req.query.end);
+                const points = await tempHistory.read(start, end);
+                res.status(200).send({
+                    start: start,
+                    end: end,
+                    sampleSeconds: 300,
+                    retentionDays: 120,
+                    points: points
+                });
             }
             catch (err) { next(err); }
         });

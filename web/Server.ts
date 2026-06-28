@@ -45,6 +45,7 @@ import { StateRoute } from "./services/state/State";
 import { StateSocket } from "./services/state/StateSocket";
 import { UtilitiesRoute } from "./services/utilities/Utilities";
 import { ruleEngine } from "./services/rules/RuleEngine";
+import { tempHistory } from "./services/state/TempHistory";
 import express = require('express');
 import extend = require("extend");
 import { setTimeout as setTimeoutSync } from 'timers';
@@ -97,6 +98,7 @@ export class WebServer {
                 }
             }
             this.initInterfaces(cfg.interfaces);
+            tempHistory.start();
 
         } catch (err) { logger.error(`Error initializing web server ${err.message}`) }
     }
@@ -159,6 +161,7 @@ export class WebServer {
     public deviceXML() { } // override in SSDP
     public async stopAsync() {
         try {
+            tempHistory.stop();
             // We want to stop all the servers in reverse order so let's pop them out.
             for (let s in this._servers) {
                 try {
