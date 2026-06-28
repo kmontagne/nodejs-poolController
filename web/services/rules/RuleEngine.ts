@@ -484,6 +484,7 @@ class RuleEngine {
     private resolveValue(group: RuleGroup, value: any): any {
         if (typeof value !== 'string') return value;
         if (typeof group.vars !== 'undefined' && typeof group.vars[value] !== 'undefined') return group.vars[value];
+        if (value.indexOf('tempDelta:') === 0) return this.resolveTempDelta(group, value);
         const bodyId = group.bodyId || 1;
         const body = state.temps.bodies.getItemById(bodyId);
         switch (value) {
@@ -501,6 +502,12 @@ class RuleEngine {
             case 'poolHeaterActive': return state.temps.bodies.getItemById(1).heatStatus > 0;
             default: return this.resolvePathValue(value);
         }
+    }
+
+    private resolveTempDelta(group: RuleGroup, value: string): number {
+        const parts = value.split(':');
+        if (parts.length !== 3) return undefined;
+        return this.delta(this.resolveValue(group, parts[1]), this.resolveValue(group, parts[2]));
     }
 
     private resolvePathValue(value: string): any {
