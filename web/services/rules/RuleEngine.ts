@@ -28,6 +28,15 @@ interface RuleHysteresis {
     resetOnFalse: boolean;
 }
 
+interface RuleActiveWindow {
+    enabled: boolean;
+    startDate?: string;
+    endDate?: string;
+    days?: number[];
+    startTime?: string;
+    endTime?: string;
+}
+
 interface RuleDefinition {
     id: string;
     name: string;
@@ -48,6 +57,7 @@ interface RuleGroup {
     bodyId?: number;
     targetType?: 'circuit' | 'feature';
     targetId?: number;
+    activeWindow?: RuleActiveWindow;
     vars: any;
     rules: RuleDefinition[];
 }
@@ -99,11 +109,16 @@ class RuleEngine {
         const cfg = this.getConfig();
         return {
             enabled: cfg.enabled,
-            groups: cfg.groups.map(group => ({
-                id: group.id,
-                enabled: group.enabled,
-                rules: group.rules.map(rule => this.getRuleStatus(cfg.enabled, group, rule))
-            }))
+            groups: cfg.groups.map(group => {
+                const activeStatus = this.getGroupActiveStatus(group);
+                return {
+                    id: group.id,
+                    enabled: group.enabled,
+                    active: cfg.enabled && group.enabled && activeStatus.active,
+                    inactiveReason: activeStatus.active ? undefined : activeStatus.reason,
+                    rules: group.rules.map(rule => this.getRuleStatus(cfg.enabled, group, rule, activeStatus))
+                };
+            })
         };
     }
 
@@ -134,6 +149,7 @@ class RuleEngine {
             bodyId: parseInt(group.bodyId, 10) || undefined,
             targetType: group.targetType === 'circuit' ? 'circuit' : group.targetType === 'feature' ? 'feature' : undefined,
             targetId: parseInt(group.targetId, 10) || undefined,
+            activeWindow: this.normalizeActiveWindow(group.activeWindow),
             vars: group.vars || {},
             rules: rules.map((r, i) => this.normalizeRule(group, r, i))
         };
@@ -179,6 +195,21 @@ class RuleEngine {
         };
     }
 
+    private normalizeActiveWindow(activeWindow: any): RuleActiveWindow {
+        activeWindow = activeWindow || {};
+        const days = Array.isArray(activeWindow.days)
+            ? activeWindow.days.map(day => parseInt(day, 10)).filter(day => !isNaN(day) && day >= 0 && day <= 6)
+            : undefined;
+        return {
+            enabled: this.makeBool(activeWindow.enabled, false),
+            startDate: this.normalizeDateText(activeWindow.startDate),
+            endDate: this.normalizeDateText(activeWindow.endDate),
+            days,
+            startTime: this.normalizeTimeText(activeWindow.startTime),
+            endTime: this.normalizeTimeText(activeWindow.endTime)
+        };
+    }
+
     private async evaluate(reason: string) {
         if (this._isEvaluating) return;
         this._isEvaluating = true;
@@ -190,6 +221,10 @@ class RuleEngine {
             }
             for (const group of cfg.groups) {
                 if (!group.enabled) continue;
+                if (!this.getGroupActiveStatus(group).active) {
+                    this.cancelGroupPending(group.id);
+                    continue;
+                }
                 await this.evaluateGroup(group, reason);
             }
         }
@@ -228,6 +263,7 @@ class RuleEngine {
                 const currentGroup = this.getConfig().groups.find(g => g.id === group.id);
                 const currentRule = currentGroup?.rules.find(r => r.id === rule.id);
                 if (!currentGroup || !currentGroup.enabled || !currentRule || !currentRule.enabled) return;
+                if (!this.getGroupActiveStatus(currentGroup).active) return;
                 if (this.conditionsMatch(currentGroup, currentRule) !== matched) return;
                 this._ruleStableStates.set(key, matched);
                 this.runActionsForState(currentGroup, currentRule, matched, reason)
@@ -275,6 +311,23 @@ class RuleEngine {
         }
     }
 
+    private cancelGroupPending(groupId: string) {
+        const keyPrefix = `${groupId}:`;
+        for (const key of Array.from(this._transitionTimers.keys())) {
+            if (!key.startsWith(keyPrefix)) continue;
+            clearTimeout(this._transitionTimers.get(key));
+            this._transitionTimers.delete(key);
+        }
+        for (const key of Array.from(this._delayedActions.keys())) {
+            if (!key.startsWith(keyPrefix)) continue;
+            clearTimeout(this._delayedActions.get(key));
+            this._delayedActions.delete(key);
+        }
+        for (const key of Array.from(this._ruleStableStates.keys())) {
+            if (key.startsWith(keyPrefix)) this._ruleStableStates.delete(key);
+        }
+    }
+
     private cancelAllPending() {
         for (const timer of this._transitionTimers.values()) clearTimeout(timer);
         this._transitionTimers.clear();
@@ -307,6 +360,7 @@ class RuleEngine {
         if (!cfg.enabled) return false;
         const group = cfg.groups.find(g => g.id === groupId);
         if (!group || !group.enabled) return false;
+        if (!this.getGroupActiveStatus(group).active) return false;
         const rule = group.rules.find(r => r.id === ruleId);
         return !!rule && rule.enabled && this.conditionsMatch(group, rule) === expectedMatch;
     }
@@ -460,7 +514,8 @@ class RuleEngine {
         return rule.match === 'any' ? results.some(r => r) : results.every(r => r);
     }
 
-    private getRuleStatus(engineEnabled: boolean, group: RuleGroup, rule: RuleDefinition) {
+    private getRuleStatus(engineEnabled: boolean, group: RuleGroup, rule: RuleDefinition, activeStatus?: { active: boolean, reason?: string }) {
+        activeStatus = activeStatus || this.getGroupActiveStatus(group);
         const key = `${group.id}:${rule.id}`;
         const conditions = (rule.conditions || []).map((condition, index) => {
             const result = this.evaluateCondition(group, condition);
@@ -479,12 +534,95 @@ class RuleEngine {
         return {
             id: rule.id,
             enabled: rule.enabled,
-            active: engineEnabled && group.enabled && rule.enabled,
+            active: engineEnabled && group.enabled && activeStatus.active && rule.enabled,
+            inactiveReason: activeStatus.active ? undefined : activeStatus.reason,
             matched,
             stableState: this._ruleStableStates.get(key),
             pending,
             conditions
         };
+    }
+
+    private getGroupActiveStatus(group: RuleGroup): { active: boolean, reason?: string } {
+        if (!group.enabled) return { active: false, reason: 'disabled' };
+        const window = group.activeWindow;
+        if (!window || window.enabled !== true) return { active: true };
+        const now = new Date();
+        if (!this.dateInActiveWindow(window, now)) return { active: false, reason: 'outsideDateRange' };
+        if (!this.dayInActiveWindow(window, now)) return { active: false, reason: 'outsideDayOfWeek' };
+        if (!this.timeInActiveWindow(window, now)) return { active: false, reason: 'outsideTimeWindow' };
+        return { active: true };
+    }
+
+    private dateInActiveWindow(window: RuleActiveWindow, now: Date): boolean {
+        const start = this.dateOrdinal(window.startDate);
+        const end = this.dateOrdinal(window.endDate);
+        if (typeof start === 'undefined' && typeof end === 'undefined') return true;
+        const current = this.monthDayOrdinal(now.getMonth() + 1, now.getDate());
+        if (typeof start !== 'undefined' && typeof end === 'undefined') return current >= start;
+        if (typeof start === 'undefined' && typeof end !== 'undefined') return current <= end;
+        return start <= end ? current >= start && current <= end : current >= start || current <= end;
+    }
+
+    private dayInActiveWindow(window: RuleActiveWindow, now: Date): boolean {
+        if (!window.days || window.days.length === 0) return true;
+        return window.days.indexOf(now.getDay()) >= 0;
+    }
+
+    private timeInActiveWindow(window: RuleActiveWindow, now: Date): boolean {
+        const start = this.timeMinutes(window.startTime);
+        const end = this.timeMinutes(window.endTime);
+        if (typeof start === 'undefined' && typeof end === 'undefined') return true;
+        const current = now.getHours() * 60 + now.getMinutes();
+        if (typeof start !== 'undefined' && typeof end === 'undefined') return current >= start;
+        if (typeof start === 'undefined' && typeof end !== 'undefined') return current <= end;
+        return start <= end ? current >= start && current <= end : current >= start || current <= end;
+    }
+
+    private normalizeDateText(value: any): string {
+        if (typeof value !== 'string') return undefined;
+        const text = value.trim();
+        if (!text) return undefined;
+        const match = text.match(/^(?:\d{4}[-/])?(\d{1,2})[-/](\d{1,2})$/);
+        if (!match) return undefined;
+        const month = parseInt(match[1], 10);
+        const day = parseInt(match[2], 10);
+        if (isNaN(month) || isNaN(day) || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+        return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+
+    private normalizeTimeText(value: any): string {
+        if (typeof value !== 'string') return undefined;
+        const text = value.trim();
+        if (!text) return undefined;
+        const match = text.match(/^(\d{1,2}):(\d{2})$/);
+        if (!match) return undefined;
+        const hours = parseInt(match[1], 10);
+        const minutes = parseInt(match[2], 10);
+        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    private dateOrdinal(value: string): number {
+        if (typeof value !== 'string') return undefined;
+        const parts = value.split('-');
+        if (parts.length !== 2) return undefined;
+        return this.monthDayOrdinal(parseInt(parts[0], 10), parseInt(parts[1], 10));
+    }
+
+    private monthDayOrdinal(month: number, day: number): number {
+        if (isNaN(month) || isNaN(day)) return undefined;
+        return month * 100 + day;
+    }
+
+    private timeMinutes(value: string): number {
+        if (typeof value !== 'string') return undefined;
+        const parts = value.split(':');
+        if (parts.length !== 2) return undefined;
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        if (isNaN(hours) || isNaN(minutes)) return undefined;
+        return hours * 60 + minutes;
     }
 
     private getPendingTransitionStatus(key: string) {
