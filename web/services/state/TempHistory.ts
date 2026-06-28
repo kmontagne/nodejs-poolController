@@ -4,6 +4,7 @@ import * as path from "path";
 import { sys } from "../../../controller/Equipment";
 import { state } from "../../../controller/State";
 import { getCoordinatesForZip } from "../../../controller/zipCoords";
+import { config } from "../../../config/Config";
 import { logger } from "../../../logger/Logger";
 
 export interface TempHistoryPoint {
@@ -74,7 +75,7 @@ class TempHistoryService {
             ts: Date.now(),
             pool: this.cleanTemp(state.temps.bodies.getItemById(1).temp),
             spa: this.cleanTemp(state.temps.bodies.getItemById(2).temp),
-            glacier: this.cleanTemp(state.temps.solar),
+            glacier: this.showSolarTemp() ? this.cleanTemp(state.temps.solar) : undefined,
             air: this.cleanTemp(state.temps.air),
             dewPoint: this.cleanTemp(this._latestDewPoint)
         };
@@ -187,6 +188,10 @@ class TempHistoryService {
     private cleanCoordinate(value: any): number {
         const n = Number(value);
         return isNaN(n) ? undefined : n;
+    }
+
+    private showSolarTemp(): boolean {
+        return config.getSection("web.temperatureLabels.solar", { show: true }).show !== false;
     }
 
     private hasAnyTemp(point: TempHistoryPoint): boolean {

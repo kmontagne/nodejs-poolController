@@ -9,6 +9,8 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.1` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases.
+
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
 - 🔌 **No cloud required** — runs on a Raspberry Pi, NAS, or any Node.js 20+ host. Pairs with [dashPanel](https://github.com/rstrouse/nodejs-poolController-dashPanel) for a web dashboard and [REM](https://github.com/rstrouse/relayEquipmentManager) for direct GPIO/i2c/SPI hardware I/O.
@@ -91,6 +93,102 @@ See the full [Changelog](https://github.com/tagyoureit/nodejs-poolController/blo
 </details>
 
 For earlier releases (8.4.x, 8.3, 8.1, 8.0, 7.x and before), see the [Changelog](https://github.com/tagyoureit/nodejs-poolController/blob/master/Changelog).
+
+## Rules engine automation
+
+njsPC includes a lightweight rules engine for local automations that should run close to the pool controller. Rules are stored in the `web.rules` section of `config.json` and can be edited from dashPanel's **Automations** panel or by using the rules API directly.
+
+Noteworthy fork-specific behavior is documented in this README as it is added, especially when it changes configuration, rule behavior, dashboard usage, or persisted data.
+
+### Rule groups and active windows
+
+Rules are organized into groups. A group can be enabled or disabled, and can optionally define an `activeWindow` that limits when the group is allowed to evaluate. If `activeWindow` is missing or disabled, the group is active all the time.
+
+An active window can include:
+
+- `startDate` and `endDate` in `MM-DD` format, for seasonal rules.
+- `days`, an array of day numbers where `0` is Sunday and `6` is Saturday.
+- `startTime` and `endTime` in `HH:mm` 24-hour format.
+
+Date ranges that cross the end of the year are supported, such as `10-15` through `03-15`. Time ranges that cross midnight are also supported, such as `22:00` through `06:00`.
+
+When a group is outside its active window, njsPC does not evaluate that group's rules and does not run `otherwiseActions`. Existing equipment state is left alone. Pending hysteresis timers, delayed actions, and remembered stable state for that group are cleared while it is inactive, so the rules start fresh when the active window opens again.
+
+Example:
+
+```json
+{
+  "id": "rule-group-glacier",
+  "name": "Glacier",
+  "enabled": true,
+  "activeWindow": {
+    "enabled": true,
+    "startDate": "05-01",
+    "endDate": "10-15",
+    "days": [0, 1, 2, 3, 4, 5, 6],
+    "startTime": "08:00",
+    "endTime": "21:00"
+  },
+  "rules": []
+}
+```
+
+### Conditions, actions, and hysteresis
+
+Each rule has conditions, `actions`, optional `otherwiseActions`, and optional hysteresis. With hysteresis enabled, the rule must remain true or false for the configured duration before the corresponding actions run. This is useful for temperature-driven automation where readings can bounce near a threshold.
+
+The engine also reconciles stable stateful actions. If a rule is already stable and true but the target circuit or feature is not in the desired state, the rule will try to run the action again on a later evaluation instead of assuming the old action succeeded.
+
+### Dew point conditions
+
+Temperature history includes an optional dew point sample, and the rules engine exposes the latest dew point as the `dewPoint` condition value. This lets you compare dew point with pool, spa, solar/glacier, air, or delta values in a rule.
+
+njsPC fetches dew point from the Open-Meteo forecast API every 15 minutes. The lookup uses pool coordinates from configuration first, then `POOL_LATITUDE` / `POOL_LONGITUDE`, then the configured pool zip code when coordinates are not set. If no location can be resolved, dew point remains unavailable and dew point conditions evaluate false.
+
+### Solar temperature display and usage
+
+Some installations use the controller's solar temperature input for a different cooling source, such as a Glacier chiller. This fork keeps the internal API field names compatible with njsPC (`solar`, `solarTemp`, and solar delta condition names), but adds a display/eligibility config under `web.temperatureLabels`.
+
+Default:
+
+```json
+{
+  "web": {
+    "temperatureLabels": {
+      "solar": {
+        "show": true,
+        "label": "Solar"
+      }
+    }
+  }
+}
+```
+
+Set `show` to `false` when the solar source should not be shown or used by the rules/history features. When hidden, temperature history stops recording the solar/glacier series and rule conditions that depend on `solarTemp`, `poolSolarDelta`, `spaSolarDelta`, or `bodySolarDelta` evaluate as unavailable/false.
+
+Set `label` to the user-facing name that should appear in dashPanel, for example `Glacier`. The underlying REST/socket fields remain named `solar` for compatibility.
+
+### Temperature history API
+
+njsPC records temperature history every 5 minutes to `data/temp-history.jsonl` and retains about 120 days of samples. Samples can include pool, spa, solar/glacier, air, and dew point values.
+
+Use the API to retrieve a time range:
+
+```http
+GET /state/tempHistory?start=2026-06-28T00:00:00&end=2026-06-28T23:59:59
+```
+
+`start` and `end` may be ISO date strings or millisecond timestamps. If omitted, the endpoint returns the last 24 hours.
+
+### Rules status API
+
+The status endpoint reports whether the rules engine and each group are active, including inactive reasons for active-window filtering:
+
+```http
+GET /config/rules/status
+```
+
+Possible group `inactiveReason` values include `disabled`, `outsideDateRange`, `outsideDayOfWeek`, and `outsideTimeWindow`.
 
 <a name="module_nodejs-poolController--install"></a>
 

@@ -81,11 +81,13 @@ export class StateRoute {
                 const start = typeof req.query.start === 'undefined' ? undefined : String(req.query.start);
                 const end = typeof req.query.end === 'undefined' ? undefined : String(req.query.end);
                 const points = await tempHistory.read(start, end);
+                const temperatureLabels = config.getSection('web.temperatureLabels', { solar: { show: true, label: 'Solar' } });
                 res.status(200).send({
                     start: start,
                     end: end,
                     sampleSeconds: 300,
                     retentionDays: 120,
+                    temperatureLabels: temperatureLabels,
                     points: points
                 });
             }
@@ -659,7 +661,11 @@ export class StateRoute {
             } catch (err) { next(err); }
         });
         app.get('/state/:section', (req, res) => {
-            res.status(200).send(state.getState(req.params.section));
+            const result = state.getState(req.params.section);
+            if (req.params.section === 'all' && result) {
+                result.temperatureLabels = config.getSection('web.temperatureLabels', { solar: { show: true, label: 'Solar' } });
+            }
+            res.status(200).send(result);
         });
     }
 }

@@ -660,12 +660,12 @@ class RuleEngine {
             case 'poolTemp': return state.temps.bodies.getItemById(1).temp;
             case 'spaTemp': return state.temps.bodies.getItemById(2).temp;
             case 'bodyTemp': return body.temp;
-            case 'solarTemp': return state.temps.solar;
+            case 'solarTemp': return this.showSolarTemp() ? state.temps.solar : undefined;
             case 'airTemp': return state.temps.air;
             case 'dewPoint': return tempHistory.latestDewPoint;
-            case 'poolSolarDelta': return this.delta(state.temps.bodies.getItemById(1).temp, state.temps.solar);
-            case 'spaSolarDelta': return this.delta(state.temps.bodies.getItemById(2).temp, state.temps.solar);
-            case 'bodySolarDelta': return this.delta(body.temp, state.temps.solar);
+            case 'poolSolarDelta': return this.showSolarTemp() ? this.delta(state.temps.bodies.getItemById(1).temp, state.temps.solar) : undefined;
+            case 'spaSolarDelta': return this.showSolarTemp() ? this.delta(state.temps.bodies.getItemById(2).temp, state.temps.solar) : undefined;
+            case 'bodySolarDelta': return this.showSolarTemp() ? this.delta(body.temp, state.temps.solar) : undefined;
             case 'spaHeatModeOn': return state.temps.bodies.getItemById(2).heatMode > 0;
             case 'spaHeaterActive': return state.temps.bodies.getItemById(2).heatStatus > 0;
             case 'poolHeatModeOn': return state.temps.bodies.getItemById(1).heatMode > 0;
@@ -696,6 +696,10 @@ class RuleEngine {
 
     private delta(a: number, b: number): number {
         return typeof a === 'number' && typeof b === 'number' ? a - b : undefined;
+    }
+
+    private showSolarTemp(): boolean {
+        return config.getSection('web.temperatureLabels.solar', { show: true }).show !== false;
     }
 
     private compare(left: any, operator: RuleOperator, right: any): boolean {

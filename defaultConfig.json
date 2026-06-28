@@ -87,6 +87,12 @@
       "enabled": true,
       "groups": []
     },
+    "temperatureLabels": {
+      "solar": {
+        "show": true,
+        "label": "Solar"
+      }
+    },
     "ruleState": {
       "scheduleDisables": {}
     },

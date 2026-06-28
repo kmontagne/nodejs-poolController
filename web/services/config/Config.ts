@@ -164,6 +164,22 @@ export class ConfigRoute {
         app.get('/config/rules', (req, res) => {
             return res.status(200).send(ruleEngine.getConfig());
         });
+        app.get('/config/temperatureLabels', (req, res) => {
+            return res.status(200).send(config.getSection('web.temperatureLabels', { solar: { show: true, label: 'Solar' } }));
+        });
+        app.put('/config/temperatureLabels', async (req, res, next) => {
+            try {
+                const current = config.getSection('web.temperatureLabels', { solar: { show: true, label: 'Solar' } });
+                const labels = extend(true, {}, current, req.body || {});
+                labels.solar = labels.solar || {};
+                labels.solar.show = labels.solar.show !== false;
+                labels.solar.label = typeof labels.solar.label === 'string' && labels.solar.label.trim().length > 0 ? labels.solar.label.trim() : 'Solar';
+                config.setSection('web.temperatureLabels', labels);
+                await config.updateAsync();
+                return res.status(200).send(config.getSection('web.temperatureLabels', { solar: { show: true, label: 'Solar' } }));
+            }
+            catch (err) { next(err); }
+        });
         app.get('/config/rules/status', (req, res) => {
             return res.status(200).send(ruleEngine.getStatus());
         });
