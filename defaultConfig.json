@@ -87,6 +87,14 @@
       "enabled": true,
       "groups": []
     },
+    "dewPoint": {
+      "provider": "openMeteo",
+      "metar": {
+        "stationIds": [],
+        "fallbackToOpenMeteo": true,
+        "maxAgeMinutes": 120
+      }
+    },
     "temperatureLabels": {
       "solar": {
         "show": true,

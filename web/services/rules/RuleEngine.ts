@@ -3,6 +3,7 @@ import { logger } from "../../../logger/Logger";
 import { sys } from "../../../controller/Equipment";
 import { state } from "../../../controller/State";
 import { tempHistory } from "../state/TempHistory";
+import { ruleActionLog, RuleActionLogDetail } from "./RuleActionLog";
 
 type RuleOperator = '>' | '>=' | '<' | '<=' | '===' | '!==' | 'isTrue' | 'isFalse';
 type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'log' | 'circuitLock' | 'featureLock';
@@ -282,18 +283,20 @@ class RuleEngine {
     }
 
     private async runActionsForState(group: RuleGroup, rule: RuleDefinition, matched: boolean, reason: string) {
+        const details: RuleActionLogDetail[] = [];
         if (matched) {
             this.cancelDelayedActions(group, rule, 'otherwise:');
             for (let i = 0; i < rule.actions.length; i++) {
-                await this.scheduleOrRunAction(group, rule, rule.actions[i], `then:${i}`, reason, true);
+                details.push(...await this.scheduleOrRunAction(group, rule, rule.actions[i], `then:${i}`, reason, true));
             }
         }
         else {
             this.cancelDelayedActions(group, rule, 'then:');
             for (let i = 0; i < rule.otherwiseActions.length; i++) {
-                await this.scheduleOrRunAction(group, rule, rule.otherwiseActions[i], `otherwise:${i}`, reason, false);
+                details.push(...await this.scheduleOrRunAction(group, rule, rule.otherwiseActions[i], `otherwise:${i}`, reason, false));
             }
         }
+        await this.logRuleActionEvent(group, rule, matched, reason, details);
     }
 
     private cancelTransition(key: string) {
@@ -335,24 +338,24 @@ class RuleEngine {
         this._delayedActions.clear();
     }
 
-    private async scheduleOrRunAction(group: RuleGroup, rule: RuleDefinition, action: RuleAction, actionIndex: string, reason: string, requiredMatch = true) {
+    private async scheduleOrRunAction(group: RuleGroup, rule: RuleDefinition, action: RuleAction, actionIndex: string, reason: string, requiredMatch = true): Promise<RuleActionLogDetail[]> {
         const key = `${group.id}:${rule.id}:${actionIndex}`;
         const delaySeconds = Math.max(0, parseInt(action.delaySeconds as any, 10) || 0);
         if (delaySeconds > 0) {
-            if (this._delayedActions.has(key)) return;
+            if (this._delayedActions.has(key)) return this.describeAction(action, 'scheduled', `Already scheduled for ${delaySeconds}s delay.`);
             const timer = setTimeout(() => {
                 this._delayedActions.delete(key);
                 if (!this.getRuleStillMatches(group.id, rule.id, requiredMatch)) return;
                 this.runAction(group, rule, action, reason).catch(err => logger.error(`Rule delayed action error: ${err?.message || err}`));
             }, delaySeconds * 1000);
             this._delayedActions.set(key, timer);
-            return;
+            return this.describeAction(action, 'scheduled', `Scheduled for ${delaySeconds}s delay.`);
         }
         if (this._delayedActions.has(key)) {
             clearTimeout(this._delayedActions.get(key));
             this._delayedActions.delete(key);
         }
-        await this.runAction(group, rule, action, reason);
+        return await this.runAction(group, rule, action, reason);
     }
 
     private getRuleStillMatches(groupId: string, ruleId: string, expectedMatch = true): boolean {
@@ -365,31 +368,102 @@ class RuleEngine {
         return !!rule && rule.enabled && this.conditionsMatch(group, rule) === expectedMatch;
     }
 
-    private async runAction(group: RuleGroup, rule: RuleDefinition, action: RuleAction, reason: string) {
+    private async runAction(group: RuleGroup, rule: RuleDefinition, action: RuleAction, reason: string): Promise<RuleActionLogDetail[]> {
+        const details: RuleActionLogDetail[] = [];
         const desired = this.resolveActionState(action);
         const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
         for (const id of ids) {
             if (!id || isNaN(id)) continue;
             if (action.type === 'setCircuit') {
-                if (state.circuits.getItemById(id).isOn === desired) continue;
+                if (state.circuits.getItemById(id).isOn === desired) {
+                    details.push(this.actionDetail(action, id, desired, 'skipped', 'Circuit already in requested state.'));
+                    continue;
+                }
                 logger.info(`Rule "${rule.name}" setting circuit ${id} ${desired ? 'ON' : 'OFF'} (${reason})`);
                 await sys.board.circuits.setCircuitStateAsync(id, desired);
+                details.push(this.actionDetail(action, id, desired, 'ran'));
             }
             else if (action.type === 'setFeature') {
-                if (state.features.getItemById(id).isOn === desired) continue;
+                if (state.features.getItemById(id).isOn === desired) {
+                    details.push(this.actionDetail(action, id, desired, 'skipped', 'Feature already in requested state.'));
+                    continue;
+                }
                 logger.info(`Rule "${rule.name}" setting feature ${id} ${desired ? 'ON' : 'OFF'} (${reason})`);
                 await sys.board.features.setFeatureStateAsync(id, desired);
+                details.push(this.actionDetail(action, id, desired, 'ran'));
             }
             else if (action.type === 'setScheduleDisabled') {
+                const needed = this.actionNeedsRun(group, rule, action);
                 await this.setScheduleDisabled(id, desired, group, rule, reason);
+                details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Schedule already in requested rule-owned state.'));
             }
             else if (action.type === 'circuitLock' || action.type === 'featureLock') {
+                const needed = this.actionNeedsRun(group, rule, action);
                 await this.setCircuitLockout(id, desired, rule.name, reason);
+                details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Circuit/feature lock already in requested state.'));
             }
         }
         if (action.type === 'log') {
             logger.info(`Rule "${rule.name}": ${action.message || 'log action'} (${reason})`);
+            details.push({
+                type: action.type,
+                status: 'log',
+                message: action.message || 'log action'
+            });
         }
+        return details;
+    }
+
+    private async logRuleActionEvent(group: RuleGroup, rule: RuleDefinition, matched: boolean, reason: string, details: RuleActionLogDetail[]) {
+        const actions = matched ? rule.actions : rule.otherwiseActions;
+        if (actions.length === 0) return;
+        const stateName = matched ? 'then' : 'otherwise';
+        try {
+            await ruleActionLog.append({
+                ts: Date.now(),
+                groupId: group.id,
+                groupName: group.name,
+                ruleId: rule.id,
+                ruleName: rule.name,
+                state: stateName,
+                reason,
+                summary: `Rule ${matched ? 'matched' : 'did not match'}; ran ${stateName === 'then' ? 'Then' : 'Otherwise'} actions.`,
+                actions: details
+            });
+        } catch (err) {
+            logger.error(`Rule action log write error: ${err?.message || err}`);
+        }
+    }
+
+    private describeAction(action: RuleAction, status: RuleActionLogDetail['status'], message?: string): RuleActionLogDetail[] {
+        const desired = this.resolveActionState(action);
+        const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
+        if (ids.length === 0) return [{ type: action.type, status, state: desired, message }];
+        return ids.filter(id => id && !isNaN(id)).map(id => this.actionDetail(action, id, desired, status, message));
+    }
+
+    private actionDetail(action: RuleAction, id: number, desired: boolean, status: RuleActionLogDetail['status'], message?: string): RuleActionLogDetail {
+        return {
+            type: action.type,
+            id,
+            name: this.actionTargetName(action, id),
+            state: desired,
+            status,
+            message
+        };
+    }
+
+    private actionTargetName(action: RuleAction, id: number): string {
+        try {
+            if (action.type === 'setCircuit' || action.type === 'circuitLock') return state.circuits.getInterfaceById(id).name || sys.circuits.getItemById(id).name;
+            if (action.type === 'setFeature' || action.type === 'featureLock') return state.features.getItemById(id).name || sys.features.getItemById(id).name;
+            if (action.type === 'setScheduleDisabled') {
+                const ssched = state.schedules.getItemById(id) as any;
+                const sched = sys.schedules.getItemById(id) as any;
+                return ssched.scheduleName || ssched.name || sched.scheduleName || sched.name;
+            }
+        } catch (err) { }
+        return undefined;
     }
 
     private actionsNeedRun(group: RuleGroup, rule: RuleDefinition, matched: boolean): boolean {

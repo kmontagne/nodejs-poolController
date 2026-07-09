@@ -30,6 +30,7 @@ import { stopPacketCaptureAsync, startPacketCapture } from '../../../app';
 import { conn } from "../../../controller/comms/Comms";
 import { webApp, BackupFile, RestoreFile } from "../../Server";
 import { ruleEngine } from "../rules/RuleEngine";
+import { ruleActionLog } from "../rules/RuleActionLog";
 import { release } from "os";
 import { ScreenLogicComms, sl } from "../../../controller/comms/ScreenLogic";
 import { IntelliCenterWSComms, icws } from "../../../controller/comms/IntelliCenterWS";
@@ -182,6 +183,12 @@ export class ConfigRoute {
         });
         app.get('/config/rules/status', (req, res) => {
             return res.status(200).send(ruleEngine.getStatus());
+        });
+        app.get('/config/rules/log', async (req, res, next) => {
+            try {
+                return res.status(200).send({ events: await ruleActionLog.read(req.query || {}) });
+            }
+            catch (err) { next(err); }
         });
         app.put('/config/rules', async (req, res, next) => {
             try {

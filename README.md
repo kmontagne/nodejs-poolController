@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.1` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases.
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.2` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -143,7 +143,26 @@ The engine also reconciles stable stateful actions. If a rule is already stable 
 
 Temperature history includes an optional dew point sample, and the rules engine exposes the latest dew point as the `dewPoint` condition value. This lets you compare dew point with pool, spa, solar/glacier, air, or delta values in a rule.
 
-njsPC fetches dew point from the Open-Meteo forecast API every 15 minutes. The lookup uses pool coordinates from configuration first, then `POOL_LATITUDE` / `POOL_LONGITUDE`, then the configured pool zip code when coordinates are not set. If no location can be resolved, dew point remains unavailable and dew point conditions evaluate false.
+njsPC fetches dew point every 15 minutes. By default it uses the Open-Meteo forecast API, looking up pool coordinates from configuration first, then `POOL_LATITUDE` / `POOL_LONGITUDE`, then the configured pool zip code when coordinates are not set. If no location can be resolved, dew point remains unavailable and dew point conditions evaluate false.
+
+Users near a reporting airport can use METAR observations instead:
+
+```json
+{
+  "web": {
+    "dewPoint": {
+      "provider": "metar",
+      "metar": {
+        "stationIds": ["KCXO", "KDWH", "KIAH"],
+        "fallbackToOpenMeteo": true,
+        "maxAgeMinutes": 120
+      }
+    }
+  }
+}
+```
+
+Set `provider` to `openMeteo` to skip METAR when no nearby airport is suitable. Set `provider` to `disabled` to leave dew point unavailable.
 
 ### Solar temperature display and usage
 
@@ -189,6 +208,18 @@ GET /config/rules/status
 ```
 
 Possible group `inactiveReason` values include `disabled`, `outsideDateRange`, `outsideDayOfWeek`, and `outsideTimeWindow`.
+
+### Rules action log API
+
+njsPC persists rule action events to `data/rule-actions.jsonl` and retains about 30 days of entries. The log records one event when a rule runs its `Then` or `Otherwise` action set. Each event includes the group, rule, resulting action branch, evaluation reason, summary text, and detailed action results for dashboard troubleshooting.
+
+Use the API to retrieve recent entries:
+
+```http
+GET /config/rules/log?limit=100
+```
+
+Optional `start` and `end` query parameters accept ISO date strings or millisecond timestamps. `limit` is capped at 1000 entries.
 
 <a name="module_nodejs-poolController--install"></a>
 

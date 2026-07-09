@@ -16,6 +16,8 @@ export interface TempHistoryPoint {
     dewPoint?: number;
 }
 
+type DewPointProvider = "openMeteo" | "metar" | "disabled";
+
 class TempHistoryService {
     private readonly _sampleMs = 5 * 60 * 1000;
     private readonly _dewPointFetchMs = 15 * 60 * 1000;
@@ -84,15 +86,31 @@ class TempHistoryService {
     private async refreshDewPoint() {
         const now = Date.now();
         if (now - this._lastDewPointFetch < this._dewPointFetchMs) return;
-        const coords = this.getPoolCoordinates();
-        if (typeof coords === "undefined") return;
+        const cfg = this.getDewPointConfig();
+        if (cfg.provider === "disabled") return;
         this._lastDewPointFetch = now;
         try {
-            const dewPoint = await this.fetchOpenMeteoDewPoint(coords.latitude, coords.longitude);
+            const dewPoint = await this.fetchConfiguredDewPoint(cfg);
             if (typeof dewPoint === "number") this.setLatestDewPoint(dewPoint);
         } catch (err) {
             logger.warn(`Dew point fetch error: ${err?.message || err}`);
         }
+    }
+
+    private async fetchConfiguredDewPoint(cfg: any): Promise<number> {
+        if (cfg.provider === "metar") {
+            const dewPoint = await this.fetchMetarDewPoint(cfg.metar.stationIds, cfg.metar.maxAgeMinutes);
+            if (typeof dewPoint === "number") return dewPoint;
+            if (cfg.metar.fallbackToOpenMeteo !== false) return await this.fetchConfiguredOpenMeteoDewPoint();
+            return undefined;
+        }
+        return await this.fetchConfiguredOpenMeteoDewPoint();
+    }
+
+    private async fetchConfiguredOpenMeteoDewPoint(): Promise<number> {
+        const coords = this.getPoolCoordinates();
+        if (typeof coords === "undefined") return undefined;
+        return await this.fetchOpenMeteoDewPoint(coords.latitude, coords.longitude);
     }
 
     private setLatestDewPoint(dewPoint: number) {
@@ -135,6 +153,30 @@ class TempHistoryService {
         const data = await this.fetchJson(url.toString());
         const dewPoint = Number(data?.current?.dew_point_2m);
         return isNaN(dewPoint) ? undefined : dewPoint;
+    }
+
+    private async fetchMetarDewPoint(stationIds: string[], maxAgeMinutes: number): Promise<number> {
+        for (const stationId of stationIds) {
+            try {
+                const dewPoint = await this.fetchMetarStationDewPoint(stationId, maxAgeMinutes);
+                if (typeof dewPoint === "number") return dewPoint;
+            } catch (err) {
+                logger.warn(`METAR dew point fetch error for ${stationId}: ${err?.message || err}`);
+            }
+        }
+        return undefined;
+    }
+
+    private async fetchMetarStationDewPoint(stationId: string, maxAgeMinutes: number): Promise<number> {
+        const url = new URL("https://aviationweather.gov/api/data/metar");
+        url.searchParams.set("ids", stationId);
+        url.searchParams.set("format", "json");
+        const data = await this.fetchJson(url.toString());
+        const obs = Array.isArray(data) ? data[0] : data;
+        if (!obs || this.isStaleMetar(obs, maxAgeMinutes)) return undefined;
+        const dewPointC = this.firstNumber(obs.dewp, obs.dewpoint, obs.dewPoint, obs.dp);
+        if (typeof dewPointC !== "number") return undefined;
+        return this.celsiusToFahrenheit(dewPointC);
     }
 
     private fetchJson(url: string): Promise<any> {
@@ -188,6 +230,64 @@ class TempHistoryService {
     private cleanCoordinate(value: any): number {
         const n = Number(value);
         return isNaN(n) ? undefined : n;
+    }
+
+    private getDewPointConfig(): any {
+        const cfg = config.getSection("web.dewPoint", {
+            provider: "openMeteo",
+            metar: {
+                stationIds: [],
+                fallbackToOpenMeteo: true,
+                maxAgeMinutes: 120
+            }
+        });
+        const provider = this.cleanProvider(cfg.provider);
+        const metar = cfg.metar || {};
+        return {
+            provider,
+            metar: {
+                stationIds: this.cleanStationIds(metar.stationIds),
+                fallbackToOpenMeteo: metar.fallbackToOpenMeteo !== false,
+                maxAgeMinutes: this.cleanPositiveNumber(metar.maxAgeMinutes, 120)
+            }
+        };
+    }
+
+    private cleanProvider(value: any): DewPointProvider {
+        if (value === "metar" || value === "disabled") return value;
+        return "openMeteo";
+    }
+
+    private cleanStationIds(value: any): string[] {
+        const ids = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+        return ids
+            .map(id => String(id).trim().toUpperCase())
+            .filter(id => /^[A-Z0-9]{3,4}$/.test(id));
+    }
+
+    private cleanPositiveNumber(value: any, fallback: number): number {
+        const n = Number(value);
+        return isNaN(n) || n <= 0 ? fallback : n;
+    }
+
+    private firstNumber(...values: any[]): number {
+        for (const value of values) {
+            const n = Number(value);
+            if (!isNaN(n)) return n;
+        }
+        return undefined;
+    }
+
+    private celsiusToFahrenheit(value: number): number {
+        return (value * 9 / 5) + 32;
+    }
+
+    private isStaleMetar(obs: any, maxAgeMinutes: number): boolean {
+        const rawTime = obs.obsTime || obs.reportTime || obs.receiptTime || obs.metarTime;
+        if (typeof rawTime === "undefined") return false;
+        const ts = typeof rawTime === "number" ? rawTime * 1000 : Date.parse(rawTime);
+        if (isNaN(ts)) return false;
+        return Date.now() - ts > maxAgeMinutes * 60 * 1000;
     }
 
     private showSolarTemp(): boolean {
