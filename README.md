@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.2` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.3` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -156,6 +156,11 @@ Users near a reporting airport can use METAR observations instead:
         "stationIds": ["KCXO", "KDWH", "KIAH"],
         "fallbackToOpenMeteo": true,
         "maxAgeMinutes": 120
+      },
+      "smoothing": {
+        "enabled": true,
+        "maxJumpF": 3,
+        "confirmationSamples": 2
       }
     }
   }
@@ -163,6 +168,8 @@ Users near a reporting airport can use METAR observations instead:
 ```
 
 Set `provider` to `openMeteo` to skip METAR when no nearby airport is suitable. Set `provider` to `disabled` to leave dew point unavailable.
+
+Dew point smoothing is enabled by default. If a fetched value jumps more than `maxJumpF` from the last accepted value, njsPC keeps the prior dew point until the jump is confirmed by `confirmationSamples` consecutive fetches. This rejects isolated bad observations while still allowing real weather changes through.
 
 ### Solar temperature display and usage
 

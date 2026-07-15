@@ -1,5 +1,15 @@
 # Changelog
 
+## 9.1.0-km.3 - 2026-07-15
+
+### Added
+
+- Added configurable dew point smoothing to reject isolated bad observations before updating rules and history.
+
+### Changed
+
+- Documented METAR dew point configuration with smoothing options.
+
 ## 9.1.0-km.2 - 2026-07-08
 
 ### Added

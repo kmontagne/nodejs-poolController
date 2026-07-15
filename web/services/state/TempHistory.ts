@@ -18,6 +18,12 @@ export interface TempHistoryPoint {
 
 type DewPointProvider = "openMeteo" | "metar" | "disabled";
 
+interface DewPointSmoothingConfig {
+    enabled: boolean;
+    maxJumpF: number;
+    confirmationSamples: number;
+}
+
 class TempHistoryService {
     private readonly _sampleMs = 5 * 60 * 1000;
     private readonly _dewPointFetchMs = 15 * 60 * 1000;
@@ -26,6 +32,7 @@ class TempHistoryService {
     private _timer: NodeJS.Timeout;
     private _lastDewPointFetch = 0;
     private _latestDewPoint: number;
+    private _pendingDewPoint: { value: number, count: number };
     private _dewPointChangeHandlers: Array<(dewPoint: number) => void> = [];
     private _started = false;
 
@@ -91,7 +98,7 @@ class TempHistoryService {
         this._lastDewPointFetch = now;
         try {
             const dewPoint = await this.fetchConfiguredDewPoint(cfg);
-            if (typeof dewPoint === "number") this.setLatestDewPoint(dewPoint);
+            if (typeof dewPoint === "number") this.acceptFetchedDewPoint(dewPoint, cfg.smoothing);
         } catch (err) {
             logger.warn(`Dew point fetch error: ${err?.message || err}`);
         }
@@ -105,6 +112,46 @@ class TempHistoryService {
             return undefined;
         }
         return await this.fetchConfiguredOpenMeteoDewPoint();
+    }
+
+    private acceptFetchedDewPoint(dewPoint: number, smoothing: DewPointSmoothingConfig) {
+        const cleanDewPoint = Math.round(dewPoint * 10) / 10;
+        if (!smoothing.enabled || typeof this._latestDewPoint !== "number") {
+            this._pendingDewPoint = undefined;
+            this.setLatestDewPoint(cleanDewPoint);
+            return;
+        }
+
+        const jump = Math.abs(cleanDewPoint - this._latestDewPoint);
+        if (jump <= smoothing.maxJumpF) {
+            this._pendingDewPoint = undefined;
+            this.setLatestDewPoint(cleanDewPoint);
+            return;
+        }
+
+        if (this._pendingDewPoint && Math.abs(cleanDewPoint - this._pendingDewPoint.value) <= smoothing.maxJumpF) {
+            this._pendingDewPoint = {
+                value: cleanDewPoint,
+                count: this._pendingDewPoint.count + 1
+            };
+        } else {
+            this._pendingDewPoint = { value: cleanDewPoint, count: 1 };
+        }
+
+        if (this._pendingDewPoint.count >= smoothing.confirmationSamples) {
+            logger.info(
+                `Dew point jump confirmed after ${this._pendingDewPoint.count} samples: ` +
+                `${this._latestDewPoint}F -> ${cleanDewPoint}F`
+            );
+            this._pendingDewPoint = undefined;
+            this.setLatestDewPoint(cleanDewPoint);
+            return;
+        }
+
+        logger.warn(
+            `Ignoring unconfirmed dew point jump: ${this._latestDewPoint}F -> ${cleanDewPoint}F ` +
+            `(max ${smoothing.maxJumpF}F, confirmation ${this._pendingDewPoint.count}/${smoothing.confirmationSamples})`
+        );
     }
 
     private async fetchConfiguredOpenMeteoDewPoint(): Promise<number> {
@@ -239,16 +286,27 @@ class TempHistoryService {
                 stationIds: [],
                 fallbackToOpenMeteo: true,
                 maxAgeMinutes: 120
+            },
+            smoothing: {
+                enabled: true,
+                maxJumpF: 3,
+                confirmationSamples: 2
             }
         });
         const provider = this.cleanProvider(cfg.provider);
         const metar = cfg.metar || {};
+        const smoothing = cfg.smoothing || {};
         return {
             provider,
             metar: {
                 stationIds: this.cleanStationIds(metar.stationIds),
                 fallbackToOpenMeteo: metar.fallbackToOpenMeteo !== false,
                 maxAgeMinutes: this.cleanPositiveNumber(metar.maxAgeMinutes, 120)
+            },
+            smoothing: {
+                enabled: smoothing.enabled !== false,
+                maxJumpF: this.cleanPositiveNumber(smoothing.maxJumpF, 3),
+                confirmationSamples: Math.max(1, Math.round(this.cleanPositiveNumber(smoothing.confirmationSamples, 2)))
             }
         };
     }

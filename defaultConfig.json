@@ -93,6 +93,11 @@
         "stationIds": [],
         "fallbackToOpenMeteo": true,
         "maxAgeMinutes": 120
+      },
+      "smoothing": {
+        "enabled": true,
+        "maxJumpF": 3,
+        "confirmationSamples": 2
       }
     },
     "temperatureLabels": {
