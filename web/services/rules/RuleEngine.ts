@@ -79,6 +79,7 @@ interface RuleRuntimeState {
 class RuleEngine {
     private _timer: NodeJS.Timeout;
     private _isEvaluating = false;
+    private _started = false;
     private _delayedActions = new Map<string, NodeJS.Timeout>();
     private _transitionTimers = new Map<string, NodeJS.Timeout>();
     private _ruleStableStates = new Map<string, boolean>();
@@ -89,10 +90,33 @@ class RuleEngine {
     }
 
     public setConfig(cfg: RuleConfig): RuleConfig {
+        const wasEnabled = this.getConfig().enabled;
         const rules = this.normalizeConfig(cfg);
         config.setSection('web.rules', rules);
+        if (wasEnabled !== rules.enabled) {
+            this.logLifecycleEvent(rules.enabled ? 'started' : 'stopped', 'config', rules.enabled ? 'Rules engine enabled.' : 'Rules engine disabled.')
+                .catch(err => logger.error(`Rule lifecycle log write error: ${err?.message || err}`));
+        }
         this.queueEvaluate('config');
         return this.getConfig();
+    }
+
+    public async start() {
+        if (this._started) return;
+        this._started = true;
+        await this.logLifecycleEvent('started', 'startup', 'Rules engine started.');
+        this.queueEvaluate('startup');
+    }
+
+    public async stop() {
+        if (!this._started) return;
+        this._started = false;
+        if (this._timer) {
+            clearTimeout(this._timer);
+            this._timer = undefined;
+        }
+        this.cancelAllPending();
+        await this.logLifecycleEvent('stopped', 'shutdown', 'Rules engine stopped.');
     }
 
     public handleEvent(evt: string) {
@@ -433,6 +457,25 @@ class RuleEngine {
         } catch (err) {
             logger.error(`Rule action log write error: ${err?.message || err}`);
         }
+    }
+
+    private async logLifecycleEvent(stateName: 'started' | 'stopped', reason: string, summary: string) {
+        await ruleActionLog.append({
+            ts: Date.now(),
+            groupId: 'rule-engine',
+            groupName: 'Rule Engine',
+            ruleId: stateName,
+            ruleName: stateName === 'started' ? 'Started' : 'Stopped',
+            state: stateName,
+            reason,
+            summary,
+            actions: [{
+                type: 'ruleEngine',
+                status: 'lifecycle',
+                state: stateName,
+                message: summary
+            }]
+        });
     }
 
     private describeAction(action: RuleAction, status: RuleActionLogDetail['status'], message?: string): RuleActionLogDetail[] {

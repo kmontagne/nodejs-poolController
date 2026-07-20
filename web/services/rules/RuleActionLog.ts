@@ -7,7 +7,7 @@ export interface RuleActionLogDetail {
     id?: number;
     name?: string;
     state?: boolean | string;
-    status: "ran" | "skipped" | "scheduled" | "log";
+    status: "ran" | "skipped" | "scheduled" | "log" | "lifecycle";
     message?: string;
 }
 
@@ -17,7 +17,7 @@ export interface RuleActionLogEvent {
     groupName: string;
     ruleId: string;
     ruleName: string;
-    state: "then" | "otherwise";
+    state: "then" | "otherwise" | "started" | "stopped";
     reason: string;
     summary: string;
     actions: RuleActionLogDetail[];

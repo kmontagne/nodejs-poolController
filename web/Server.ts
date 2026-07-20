@@ -100,6 +100,7 @@ export class WebServer {
             this.initInterfaces(cfg.interfaces);
             tempHistory.onDewPointChange(() => ruleEngine.handleEvent('weather'));
             tempHistory.start();
+            await ruleEngine.start();
 
         } catch (err) { logger.error(`Error initializing web server ${err.message}`) }
     }
@@ -162,6 +163,7 @@ export class WebServer {
     public deviceXML() { } // override in SSDP
     public async stopAsync() {
         try {
+            await ruleEngine.stop();
             tempHistory.stop();
             // We want to stop all the servers in reverse order so let's pop them out.
             for (let s in this._servers) {

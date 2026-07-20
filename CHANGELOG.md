@@ -1,5 +1,11 @@
 # Changelog
 
+## 9.1.0-km.4 - 2026-07-20
+
+### Added
+
+- Added rule engine lifecycle entries to the rule action log when the engine starts, stops, or is enabled/disabled.
+
 ## 9.1.0-km.3 - 2026-07-15
 
 ### Added

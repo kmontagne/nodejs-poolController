@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.3` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.4` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -138,6 +138,8 @@ Example:
 Each rule has conditions, `actions`, optional `otherwiseActions`, and optional hysteresis. With hysteresis enabled, the rule must remain true or false for the configured duration before the corresponding actions run. This is useful for temperature-driven automation where readings can bounce near a threshold.
 
 The engine also reconciles stable stateful actions. If a rule is already stable and true but the target circuit or feature is not in the desired state, the rule will try to run the action again on a later evaluation instead of assuming the old action succeeded.
+
+Rule action logging also records rule engine lifecycle events. Startup, graceful shutdown, and user enable/disable transitions are written to the same `data/rule-actions.jsonl` file as rule action events so the dashboard can show when automation was actually active.
 
 ### Dew point conditions
 
