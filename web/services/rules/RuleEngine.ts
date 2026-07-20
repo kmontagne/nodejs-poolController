@@ -404,8 +404,12 @@ class RuleEngine {
                     continue;
                 }
                 logger.info(`Rule "${rule.name}" setting circuit ${id} ${desired ? 'ON' : 'OFF'} (${reason})`);
-                await sys.board.circuits.setCircuitStateAsync(id, desired);
-                details.push(this.actionDetail(action, id, desired, 'ran'));
+                try {
+                    await sys.board.circuits.setCircuitStateAsync(id, desired);
+                    details.push(this.actionDetail(action, id, desired, 'ran'));
+                } catch (err) {
+                    details.push(this.actionDetail(action, id, desired, 'error', err?.message || String(err)));
+                }
             }
             else if (action.type === 'setFeature') {
                 if (state.features.getItemById(id).isOn === desired) {
@@ -413,18 +417,30 @@ class RuleEngine {
                     continue;
                 }
                 logger.info(`Rule "${rule.name}" setting feature ${id} ${desired ? 'ON' : 'OFF'} (${reason})`);
-                await sys.board.features.setFeatureStateAsync(id, desired);
-                details.push(this.actionDetail(action, id, desired, 'ran'));
+                try {
+                    await sys.board.features.setFeatureStateAsync(id, desired);
+                    details.push(this.actionDetail(action, id, desired, 'ran'));
+                } catch (err) {
+                    details.push(this.actionDetail(action, id, desired, 'error', err?.message || String(err)));
+                }
             }
             else if (action.type === 'setScheduleDisabled') {
                 const needed = this.actionNeedsRun(group, rule, action);
-                await this.setScheduleDisabled(id, desired, group, rule, reason);
-                details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Schedule already in requested rule-owned state.'));
+                try {
+                    await this.setScheduleDisabled(id, desired, group, rule, reason);
+                    details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Schedule already in requested rule-owned state.'));
+                } catch (err) {
+                    details.push(this.actionDetail(action, id, desired, 'error', err?.message || String(err)));
+                }
             }
             else if (action.type === 'circuitLock' || action.type === 'featureLock') {
                 const needed = this.actionNeedsRun(group, rule, action);
-                await this.setCircuitLockout(id, desired, rule.name, reason);
-                details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Circuit/feature lock already in requested state.'));
+                try {
+                    await this.setCircuitLockout(id, desired, rule.name, reason);
+                    details.push(this.actionDetail(action, id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Circuit/feature lock already in requested state.'));
+                } catch (err) {
+                    details.push(this.actionDetail(action, id, desired, 'error', err?.message || String(err)));
+                }
             }
         }
         if (action.type === 'log') {

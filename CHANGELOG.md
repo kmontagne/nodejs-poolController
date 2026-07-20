@@ -1,5 +1,11 @@
 # Changelog
 
+## 9.1.0-km.5 - 2026-07-20
+
+### Fixed
+
+- Ensured rule action log events are still persisted when an equipment command reports an error.
+
 ## 9.1.0-km.4 - 2026-07-20
 
 ### Added

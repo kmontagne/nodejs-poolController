@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.4` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.5` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -220,7 +220,7 @@ Possible group `inactiveReason` values include `disabled`, `outsideDateRange`, `
 
 ### Rules action log API
 
-njsPC persists rule action events to `data/rule-actions.jsonl` and retains about 30 days of entries. The log records one event when a rule runs its `Then` or `Otherwise` action set. Each event includes the group, rule, resulting action branch, evaluation reason, summary text, and detailed action results for dashboard troubleshooting.
+njsPC persists rule action events to `data/rule-actions.jsonl` and retains about 30 days of entries. The log records one event when a rule runs its `Then` or `Otherwise` action set. Each event includes the group, rule, resulting action branch, evaluation reason, summary text, and detailed action results for dashboard troubleshooting. If an equipment command reports an error, the rule event is still logged with an action detail status of `error` and the command error message.
 
 Use the API to retrieve recent entries:
 
