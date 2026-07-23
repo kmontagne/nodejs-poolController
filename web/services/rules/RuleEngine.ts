@@ -83,6 +83,9 @@ class RuleEngine {
     private _delayedActions = new Map<string, NodeJS.Timeout>();
     private _transitionTimers = new Map<string, NodeJS.Timeout>();
     private _ruleStableStates = new Map<string, boolean>();
+    private _ruleStableSince = new Map<string, number>();
+    private _ruleConditionStableStates = new Map<string, boolean>();
+    private _ruleConditionStableSince = new Map<string, number>();
     private readonly _events = ['temps', 'body', 'bodyTempState', 'circuit', 'feature', 'schedule', 'controller', 'weather'];
 
     public getConfig(): RuleConfig {
@@ -290,7 +293,7 @@ class RuleEngine {
                 if (!currentGroup || !currentGroup.enabled || !currentRule || !currentRule.enabled) return;
                 if (!this.getGroupActiveStatus(currentGroup).active) return;
                 if (this.conditionsMatch(currentGroup, currentRule) !== matched) return;
-                this._ruleStableStates.set(key, matched);
+                this.setRuleStableState(key, matched);
                 this.runActionsForState(currentGroup, currentRule, matched, reason)
                     .catch(err => logger.error(`Rule hysteresis action error: ${err?.message || err}`));
             }, h.durationSeconds * 1000);
@@ -302,8 +305,17 @@ class RuleEngine {
         }
 
         this.cancelTransition(key);
-        this._ruleStableStates.set(key, matched);
+        this.setRuleStableState(key, matched);
         await this.runActionsForState(group, rule, matched, reason);
+    }
+
+    private setRuleStableState(key: string, matched: boolean) {
+        if (this._ruleStableStates.get(key) !== matched) {
+            this._ruleStableSince.set(key, Date.now());
+        } else if (!this._ruleStableSince.has(key)) {
+            this._ruleStableSince.set(key, Date.now());
+        }
+        this._ruleStableStates.set(key, matched);
     }
 
     private async runActionsForState(group: RuleGroup, rule: RuleDefinition, matched: boolean, reason: string) {
@@ -351,7 +363,16 @@ class RuleEngine {
             this._delayedActions.delete(key);
         }
         for (const key of Array.from(this._ruleStableStates.keys())) {
-            if (key.startsWith(keyPrefix)) this._ruleStableStates.delete(key);
+            if (key.startsWith(keyPrefix)) {
+                this._ruleStableStates.delete(key);
+                this._ruleStableSince.delete(key);
+            }
+        }
+        for (const key of Array.from(this._ruleConditionStableStates.keys())) {
+            if (key.startsWith(keyPrefix)) {
+                this._ruleConditionStableStates.delete(key);
+                this._ruleConditionStableSince.delete(key);
+            }
         }
     }
 
@@ -360,6 +381,10 @@ class RuleEngine {
         this._transitionTimers.clear();
         for (const timer of this._delayedActions.values()) clearTimeout(timer);
         this._delayedActions.clear();
+        this._ruleStableStates.clear();
+        this._ruleStableSince.clear();
+        this._ruleConditionStableStates.clear();
+        this._ruleConditionStableSince.clear();
     }
 
     private async scheduleOrRunAction(group: RuleGroup, rule: RuleDefinition, action: RuleAction, actionIndex: string, reason: string, requiredMatch = true): Promise<RuleActionLogDetail[]> {
@@ -643,15 +668,17 @@ class RuleEngine {
     private conditionsMatch(group: RuleGroup, rule: RuleDefinition): boolean {
         const conditions = rule.conditions;
         if (!conditions || conditions.length === 0) return true;
-        const results = conditions.map(condition => this.evaluateCondition(group, condition).matched);
+        this.updateRuleConditionStableState(group, rule);
+        const results = conditions.map(condition => this.evaluateCondition(group, rule, condition).matched);
         return rule.match === 'any' ? results.some(r => r) : results.every(r => r);
     }
 
     private getRuleStatus(engineEnabled: boolean, group: RuleGroup, rule: RuleDefinition, activeStatus?: { active: boolean, reason?: string }) {
         activeStatus = activeStatus || this.getGroupActiveStatus(group);
         const key = `${group.id}:${rule.id}`;
+        this.updateRuleConditionStableState(group, rule);
         const conditions = (rule.conditions || []).map((condition, index) => {
-            const result = this.evaluateCondition(group, condition);
+            const result = this.evaluateCondition(group, rule, condition);
             return {
                 index,
                 matched: result.matched,
@@ -671,9 +698,36 @@ class RuleEngine {
             inactiveReason: activeStatus.active ? undefined : activeStatus.reason,
             matched,
             stableState: this._ruleStableStates.get(key),
+            stableSince: this._ruleStableSince.get(key),
+            stableSeconds: this.elapsedSeconds(this._ruleStableSince.get(key)),
+            conditionStableState: this._ruleConditionStableStates.get(key),
+            conditionStableSince: this._ruleConditionStableSince.get(key),
+            conditionStableSeconds: this.elapsedSeconds(this._ruleConditionStableSince.get(key)),
             pending,
             conditions
         };
+    }
+
+    private updateRuleConditionStableState(group: RuleGroup, rule: RuleDefinition) {
+        const key = `${group.id}:${rule.id}`;
+        const conditions = (rule.conditions || []).filter(condition => !this.isRuleStableCondition(condition));
+        const matched = this.aggregateConditionMatches(group, rule, conditions);
+        if (this._ruleConditionStableStates.get(key) !== matched) {
+            this._ruleConditionStableSince.set(key, Date.now());
+        } else if (!this._ruleConditionStableSince.has(key)) {
+            this._ruleConditionStableSince.set(key, Date.now());
+        }
+        this._ruleConditionStableStates.set(key, matched);
+    }
+
+    private aggregateConditionMatches(group: RuleGroup, rule: RuleDefinition, conditions: RuleCondition[]): boolean {
+        if (!conditions || conditions.length === 0) return true;
+        const results = conditions.map(condition => this.evaluateCondition(group, rule, condition).matched);
+        return rule.match === 'any' ? results.some(r => r) : results.every(r => r);
+    }
+
+    private isRuleStableCondition(condition: RuleCondition): boolean {
+        return typeof condition?.left === 'string' && condition.left.indexOf('rule:stable') === 0;
     }
 
     private getGroupActiveStatus(group: RuleGroup): { active: boolean, reason?: string } {
@@ -772,21 +826,22 @@ class RuleEngine {
         };
     }
 
-    private evaluateCondition(group: RuleGroup, condition: RuleCondition): { matched: boolean, left: any, right: any } {
-        const left = this.resolveValue(group, condition.left);
+    private evaluateCondition(group: RuleGroup, rule: RuleDefinition, condition: RuleCondition): { matched: boolean, left: any, right: any } {
+        const left = this.resolveValue(group, rule, condition.left);
         if (condition.operator === 'isTrue') return { matched: left === true, left, right: undefined };
         if (condition.operator === 'isFalse') return { matched: left === false, left, right: undefined };
-        const right = this.resolveValue(group, condition.right);
+        const right = this.resolveValue(group, rule, condition.right);
         if (typeof left === 'undefined' || typeof right === 'undefined' || left === null || right === null) {
             return { matched: false, left, right };
         }
         return { matched: this.compare(left, condition.operator, right), left, right };
     }
 
-    private resolveValue(group: RuleGroup, value: any): any {
+    private resolveValue(group: RuleGroup, rule: RuleDefinition, value: any): any {
         if (typeof value !== 'string') return value;
         if (typeof group.vars !== 'undefined' && typeof group.vars[value] !== 'undefined') return group.vars[value];
-        if (value.indexOf('tempDelta:') === 0) return this.resolveTempDelta(group, value);
+        if (value.indexOf('tempDelta:') === 0) return this.resolveTempDelta(group, rule, value);
+        if (value.indexOf('rule:') === 0) return this.resolveRuleValue(group, rule, value);
         const bodyId = group.bodyId || 1;
         const body = state.temps.bodies.getItemById(bodyId);
         switch (value) {
@@ -807,10 +862,22 @@ class RuleEngine {
         }
     }
 
-    private resolveTempDelta(group: RuleGroup, value: string): number {
+    private resolveTempDelta(group: RuleGroup, rule: RuleDefinition, value: string): number {
         const parts = value.split(':');
         if (parts.length !== 3) return undefined;
-        return this.delta(this.resolveValue(group, parts[1]), this.resolveValue(group, parts[2]));
+        return this.delta(this.resolveValue(group, rule, parts[1]), this.resolveValue(group, rule, parts[2]));
+    }
+
+    private resolveRuleValue(group: RuleGroup, rule: RuleDefinition, value: string): any {
+        const parts = value.split(':');
+        if (parts.length !== 2) return undefined;
+        const key = `${group.id}:${rule.id}`;
+        switch (parts[1]) {
+            case 'stableMinutes': return this.elapsedMinutes(this._ruleConditionStableSince.get(key));
+            case 'stableSeconds': return this.elapsedSeconds(this._ruleConditionStableSince.get(key));
+            case 'stableState': return this._ruleConditionStableStates.get(key);
+            default: return undefined;
+        }
     }
 
     private resolvePathValue(value: string): any {
@@ -820,11 +887,41 @@ class RuleEngine {
         if (isNaN(id)) return undefined;
         switch (`${parts[0]}:${parts[2]}`) {
             case 'circuit:isOn': return state.circuits.getItemById(id).isOn === true;
+            case 'circuit:runtimeMinutes': return this.equipmentRuntimeMinutes(state.circuits.getItemById(id));
+            case 'circuit:runtimeSeconds': return this.equipmentRuntimeSeconds(state.circuits.getItemById(id));
             case 'feature:isOn': return state.features.getItemById(id).isOn === true;
+            case 'feature:runtimeMinutes': return this.equipmentRuntimeMinutes(state.features.getItemById(id));
+            case 'feature:runtimeSeconds': return this.equipmentRuntimeSeconds(state.features.getItemById(id));
             case 'schedule:disabled': return state.schedules.getItemById(id).disabled === true;
             case 'schedule:isOn': return state.schedules.getItemById(id).isOn === true;
             default: return value;
         }
+    }
+
+    private equipmentRuntimeMinutes(equipment: any): number {
+        return this.equipmentRuntimeSeconds(equipment) / 60;
+    }
+
+    private equipmentRuntimeSeconds(equipment: any): number {
+        if (!equipment || equipment.isOn !== true) return 0;
+        return this.elapsedSeconds(this.parseTimestamp(equipment.startTime));
+    }
+
+    private elapsedMinutes(startedAt: number): number {
+        return this.elapsedSeconds(startedAt) / 60;
+    }
+
+    private elapsedSeconds(startedAt: number): number {
+        return typeof startedAt === 'number' && !isNaN(startedAt) ? Math.max(0, (Date.now() - startedAt) / 1000) : undefined;
+    }
+
+    private parseTimestamp(value: any): number {
+        if (typeof value === 'number' && !isNaN(value)) return value;
+        if (typeof value === 'string' && value.trim().length > 0) {
+            const parsed = Date.parse(value);
+            if (!isNaN(parsed)) return parsed;
+        }
+        return undefined;
     }
 
     private delta(a: number, b: number): number {

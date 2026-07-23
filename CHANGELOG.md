@@ -1,5 +1,11 @@
 # Changelog
 
+## 9.1.0-km.6 - 2026-07-22
+
+### Added
+
+- Added rule conditions for circuit/feature runtime and rule condition stable time.
+
 ## 9.1.0-km.5 - 2026-07-20
 
 ### Fixed

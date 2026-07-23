@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.5` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.6` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -140,6 +140,22 @@ Each rule has conditions, `actions`, optional `otherwiseActions`, and optional h
 The engine also reconciles stable stateful actions. If a rule is already stable and true but the target circuit or feature is not in the desired state, the rule will try to run the action again on a later evaluation instead of assuming the old action succeeded.
 
 Rule action logging also records rule engine lifecycle events. Startup, graceful shutdown, and user enable/disable transitions are written to the same `data/rule-actions.jsonl` file as rule action events so the dashboard can show when automation was actually active.
+
+Rules can compare equipment runtime when a circuit or feature needs a warm-up period before another condition is meaningful:
+
+```json
+{ "left": "circuit:5:runtimeMinutes", "operator": ">=", "right": 10 }
+```
+
+Supported runtime condition values are `circuit:<id>:runtimeMinutes`, `circuit:<id>:runtimeSeconds`, `feature:<id>:runtimeMinutes`, and `feature:<id>:runtimeSeconds`. Runtime is reported as `0` while the equipment is off.
+
+Rules can also compare how long the rule's other conditions have continuously stayed in their current aggregate true/false state:
+
+```json
+{ "left": "rule:stableMinutes", "operator": ">=", "right": 10 }
+```
+
+Supported stable-time values are `rule:stableMinutes`, `rule:stableSeconds`, and `rule:stableState`. Stable time excludes the stable-time condition itself so it can be used as an additional gate without becoming circular.
 
 ### Dew point conditions
 
