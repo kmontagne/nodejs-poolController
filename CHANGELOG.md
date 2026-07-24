@@ -1,5 +1,11 @@
 # Changelog
 
+## 9.1.0-km.7 - 2026-07-24
+
+### Added
+
+- Added a `setPumpCircuitSpeed` rule action for changing a pump circuit's configured RPM from automation rules.
+
 ## 9.1.0-km.6 - 2026-07-22
 
 ### Added

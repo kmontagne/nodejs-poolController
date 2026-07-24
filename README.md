@@ -9,7 +9,7 @@
 
 **Local, open-source control for Pentair IntelliCenter / IntelliTouch / EasyTouch, Jandy Aqualink, Hayward, and standalone pool equipment.** A self-hosted alternative to the Pentair Home and ScreenLogic cloud apps — your data stays on your network, your pool responds in real time, and your smart home can finally see it.
 
-> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.6` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
+> **Fork/version note:** this fork uses semver prerelease versions such as `9.1.0-km.7` to distinguish Kevin Montagne builds from upstream njsPC releases. The upstream base version remains visible, and the `km.N` suffix increments for fork-specific feature or documentation releases. Fork release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 - 🌊 **Works with your gear** — IntelliCenter (through firmware v3.008), IntelliTouch, EasyTouch, SunTouch, Aqualink, IntelliCom, or no controller at all (Nixie mode).
 - 🏠 **Plugs into your smart home** — HomeKit/Siri (via Homebridge), Home Assistant (via MQTT), Hubitat, SmartThings, MQTT, InfluxDB, Alexa.
@@ -156,6 +156,14 @@ Rules can also compare how long the rule's other conditions have continuously st
 ```
 
 Supported stable-time values are `rule:stableMinutes`, `rule:stableSeconds`, and `rule:stableState`. Stable time excludes the stable-time condition itself so it can be used as an additional gate without becoming circular.
+
+Rules can change a pump circuit's configured RPM:
+
+```json
+{ "type": "setPumpCircuitSpeed", "pumpId": 1, "circuitId": 6, "speed": 1800 }
+```
+
+This updates the selected pump/circuit speed entry; normal pump arbitration still applies. If another active circuit or schedule calls for a higher configured speed, the pump controller will continue to use the higher speed.
 
 ### Dew point conditions
 

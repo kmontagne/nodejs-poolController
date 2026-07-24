@@ -5,8 +5,11 @@ import { logger } from "../../../logger/Logger";
 export interface RuleActionLogDetail {
     type: string;
     id?: number;
+    pumpId?: number;
+    circuitId?: number;
     name?: string;
     state?: boolean | string;
+    speed?: number;
     status: "ran" | "skipped" | "scheduled" | "log" | "lifecycle" | "error";
     message?: string;
 }

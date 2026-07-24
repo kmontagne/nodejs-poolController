@@ -6,7 +6,7 @@ import { tempHistory } from "../state/TempHistory";
 import { ruleActionLog, RuleActionLogDetail } from "./RuleActionLog";
 
 type RuleOperator = '>' | '>=' | '<' | '<=' | '===' | '!==' | 'isTrue' | 'isFalse';
-type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'log' | 'circuitLock' | 'featureLock';
+type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'setPumpCircuitSpeed' | 'log' | 'circuitLock' | 'featureLock';
 
 interface RuleCondition {
     left: string | number | boolean;
@@ -18,6 +18,9 @@ interface RuleAction {
     type: ActionType;
     id?: number;
     ids?: number[];
+    pumpId?: number;
+    circuitId?: number;
+    speed?: number;
     state?: boolean | string;
     message?: string;
     delaySeconds?: number;
@@ -208,6 +211,9 @@ class RuleEngine {
             type: action.type || 'setCircuit',
             id: typeof action.id !== 'undefined' ? parseInt(action.id, 10) : undefined,
             ids: Array.isArray(action.ids) ? action.ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : undefined,
+            pumpId: typeof action.pumpId !== 'undefined' ? parseInt(action.pumpId, 10) : undefined,
+            circuitId: typeof action.circuitId !== 'undefined' ? parseInt(action.circuitId, 10) : undefined,
+            speed: typeof action.speed !== 'undefined' ? parseInt(action.speed, 10) : undefined,
             state: typeof action.state === 'undefined' ? true : action.state,
             message: action.message,
             delaySeconds: parseInt(action.delaySeconds, 10) || 0
@@ -421,6 +427,16 @@ class RuleEngine {
         const details: RuleActionLogDetail[] = [];
         const desired = this.resolveActionState(action);
         const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
+        if (action.type === 'setPumpCircuitSpeed') {
+            try {
+                const needed = this.actionNeedsRun(group, rule, action);
+                await this.setPumpCircuitSpeed(action.pumpId, action.circuitId, action.speed, rule.name, reason);
+                details.push(this.pumpCircuitSpeedActionDetail(action, needed ? 'ran' : 'skipped', needed ? undefined : 'Pump circuit already at requested RPM.'));
+            } catch (err) {
+                details.push(this.pumpCircuitSpeedActionDetail(action, 'error', err?.message || String(err)));
+            }
+            return details;
+        }
         for (const id of ids) {
             if (!id || isNaN(id)) continue;
             if (action.type === 'setCircuit') {
@@ -521,6 +537,7 @@ class RuleEngine {
 
     private describeAction(action: RuleAction, status: RuleActionLogDetail['status'], message?: string): RuleActionLogDetail[] {
         const desired = this.resolveActionState(action);
+        if (action.type === 'setPumpCircuitSpeed') return [this.pumpCircuitSpeedActionDetail(action, status, message)];
         const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
         if (ids.length === 0) return [{ type: action.type, status, state: desired, message }];
         return ids.filter(id => id && !isNaN(id)).map(id => this.actionDetail(action, id, desired, status, message));
@@ -532,6 +549,19 @@ class RuleEngine {
             id,
             name: this.actionTargetName(action, id),
             state: desired,
+            status,
+            message
+        };
+    }
+
+    private pumpCircuitSpeedActionDetail(action: RuleAction, status: RuleActionLogDetail['status'], message?: string): RuleActionLogDetail {
+        return {
+            type: action.type,
+            id: action.pumpId,
+            pumpId: action.pumpId,
+            circuitId: action.circuitId,
+            name: this.pumpCircuitTargetName(action.pumpId, action.circuitId),
+            speed: action.speed,
             status,
             message
         };
@@ -550,6 +580,15 @@ class RuleEngine {
         return undefined;
     }
 
+    private pumpCircuitTargetName(pumpId: number, circuitId: number): string {
+        try {
+            const pump = sys.pumps.getItemById(pumpId);
+            const circuit = state.circuits.getInterfaceById(circuitId);
+            return `${pump.name || `Pump ${pumpId}`} / ${circuit.name || `Circuit ${circuitId}`}`;
+        } catch (err) { }
+        return undefined;
+    }
+
     private actionsNeedRun(group: RuleGroup, rule: RuleDefinition, matched: boolean): boolean {
         const actions = matched ? rule.actions : rule.otherwiseActions;
         return actions.some(action => this.actionNeedsRun(group, rule, action));
@@ -557,6 +596,10 @@ class RuleEngine {
 
     private actionNeedsRun(group: RuleGroup, rule: RuleDefinition, action: RuleAction): boolean {
         if (action.type === 'log') return false;
+        if (action.type === 'setPumpCircuitSpeed') {
+            const circuit = this.getPumpCircuit(action.pumpId, action.circuitId);
+            return !!circuit && circuit.speed !== action.speed;
+        }
         const desired = this.resolveActionState(action);
         const ids = action.ids && action.ids.length > 0 ? action.ids : typeof action.id !== 'undefined' ? [action.id] : [];
         return ids.some(id => {
@@ -575,6 +618,30 @@ class RuleEngine {
             }
             return false;
         });
+    }
+
+    private async setPumpCircuitSpeed(pumpId: number, circuitId: number, speed: number, ruleName: string, reason: string) {
+        if (!pumpId || isNaN(pumpId)) throw new Error('Pump id is required.');
+        if (!circuitId || isNaN(circuitId)) throw new Error('Pump circuit id is required.');
+        if (!speed || isNaN(speed)) throw new Error('Pump speed RPM is required.');
+        const pump = sys.pumps.getItemById(pumpId, false);
+        if (!pump) throw new Error(`Pump ${pumpId} was not found.`);
+        const currentCircuit = this.getPumpCircuit(pumpId, circuitId);
+        if (!currentCircuit) throw new Error(`Circuit ${circuitId} is not configured on pump ${pumpId}.`);
+        if (currentCircuit.speed === speed) return;
+        const data = pump.get(true);
+        const circuit = data.circuits.find(c => parseInt(c.circuit, 10) === circuitId);
+        if (!circuit) throw new Error(`Circuit ${circuitId} is not configured on pump ${pumpId}.`);
+        circuit.speed = speed;
+        logger.info(`Rule "${ruleName}" setting pump ${pumpId} circuit ${circuitId} speed to ${speed} RPM (${reason})`);
+        await sys.board.pumps.setPumpAsync(data);
+    }
+
+    private getPumpCircuit(pumpId: number, circuitId: number): any {
+        if (!pumpId || isNaN(pumpId) || !circuitId || isNaN(circuitId)) return undefined;
+        const pump = sys.pumps.getItemById(pumpId, false);
+        if (!pump) return undefined;
+        return pump.circuits.find(c => Number(c.circuit) === circuitId);
     }
 
     private async setCircuitLockout(id: number, locked: boolean, ruleName: string, reason: string) {
