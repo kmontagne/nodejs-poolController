@@ -184,6 +184,14 @@ export class ConfigRoute {
         app.get('/config/rules/status', (req, res) => {
             return res.status(200).send(ruleEngine.getStatus());
         });
+        app.put('/config/rules/mode/:id', async (req, res, next) => {
+            try {
+                const rules = ruleEngine.setMode(req.params.id, utils.makeBool(typeof req.body.isOn !== 'undefined' ? req.body.isOn : req.body.state));
+                await config.updateAsync();
+                return res.status(200).send(rules);
+            }
+            catch (err) { next(err); }
+        });
         app.get('/config/rules/log', async (req, res, next) => {
             try {
                 return res.status(200).send({ events: await ruleActionLog.read(req.query || {}) });

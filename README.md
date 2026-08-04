@@ -141,6 +141,10 @@ The engine also reconciles stable stateful actions. If a rule is already stable 
 
 Rule action logging also records rule engine lifecycle events. Startup, graceful shutdown, and user enable/disable transitions are written to the same `data/rule-actions.jsonl` file as rule action events so the dashboard can show when automation was actually active.
 
+Rules can use named modes such as `Party Mode` as conditions. Modes are persisted under `web.rules.modes`, can be toggled through the rules API, and are exposed to conditions as `mode:<id>:isOn`.
+
+Rules can disable and later restore a circuit or feature egg timer with rule ownership tracking. The disable action sets the target to `dontStop`; the restore action puts back the egg timer settings captured when that rule first disabled the target.
+
 Rules can compare equipment runtime when a circuit or feature needs a warm-up period before another condition is meaningful:
 
 ```json
@@ -164,6 +168,8 @@ Rules can change a pump circuit's configured RPM:
 ```
 
 This updates the selected pump/circuit speed entry; normal pump arbitration still applies. If another active circuit or schedule calls for a higher configured speed, the pump controller will continue to use the higher speed.
+
+Rules can also compare live pump RPM with `pump:<id>:rpm`. Pump state changes trigger rule evaluation, so RPM-dependent rules do not have to wait for a temperature, circuit, or schedule update.
 
 ### Dew point conditions
 

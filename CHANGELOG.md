@@ -1,5 +1,13 @@
 # Changelog
 
+## 9.1.0-km.8 - 2026-08-04
+
+### Added
+
+- Added rule modes, including Party Mode, that can be used as automation conditions.
+- Added rule-owned egg timer disable/restore actions for circuits and features.
+- Added pump RPM rule conditions using live pump speed, with pump state changes triggering rule evaluation.
+
 ## 9.1.0-km.7 - 2026-07-24
 
 ### Added

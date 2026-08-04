@@ -6,7 +6,7 @@ import { tempHistory } from "../state/TempHistory";
 import { ruleActionLog, RuleActionLogDetail } from "./RuleActionLog";
 
 type RuleOperator = '>' | '>=' | '<' | '<=' | '===' | '!==' | 'isTrue' | 'isFalse';
-type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'setPumpCircuitSpeed' | 'log' | 'circuitLock' | 'featureLock';
+type ActionType = 'setCircuit' | 'setFeature' | 'setScheduleDisabled' | 'setPumpCircuitSpeed' | 'setEggTimerDisabled' | 'log' | 'circuitLock' | 'featureLock';
 
 interface RuleCondition {
     left: string | number | boolean;
@@ -18,6 +18,7 @@ interface RuleAction {
     type: ActionType;
     id?: number;
     ids?: number[];
+    targetType?: 'circuit' | 'feature';
     pumpId?: number;
     circuitId?: number;
     speed?: number;
@@ -68,15 +69,29 @@ interface RuleGroup {
 
 interface RuleConfig {
     enabled: boolean;
+    modes: RuleMode[];
     groups: RuleGroup[];
+}
+
+interface RuleMode {
+    id: string;
+    name: string;
+    isOn: boolean;
 }
 
 interface ScheduleDisableState {
     owners: string[];
 }
 
+interface EggTimerOverrideState {
+    owners: string[];
+    eggTimer?: number;
+    dontStop?: boolean;
+}
+
 interface RuleRuntimeState {
     scheduleDisables: { [id: string]: ScheduleDisableState };
+    eggTimerOverrides: { [key: string]: EggTimerOverrideState };
 }
 
 class RuleEngine {
@@ -89,7 +104,7 @@ class RuleEngine {
     private _ruleStableSince = new Map<string, number>();
     private _ruleConditionStableStates = new Map<string, boolean>();
     private _ruleConditionStableSince = new Map<string, number>();
-    private readonly _events = ['temps', 'body', 'bodyTempState', 'circuit', 'feature', 'schedule', 'controller', 'weather'];
+    private readonly _events = ['temps', 'body', 'bodyTempState', 'circuit', 'feature', 'schedule', 'controller', 'weather', 'pump'];
 
     public getConfig(): RuleConfig {
         return this.normalizeConfig(config.getSection('web.rules', { enabled: true, groups: [] }));
@@ -104,6 +119,19 @@ class RuleEngine {
                 .catch(err => logger.error(`Rule lifecycle log write error: ${err?.message || err}`));
         }
         this.queueEvaluate('config');
+        return this.getConfig();
+    }
+
+    public setMode(id: string, isOn: boolean): RuleConfig {
+        const rules = this.getConfig();
+        const modeId = this.normalizeModeId(id);
+        let mode = rules.modes.find(m => m.id === modeId);
+        if (!mode) {
+            mode = { id: modeId, name: this.modeName(modeId), isOn: false };
+            rules.modes.push(mode);
+        }
+        mode.isOn = this.makeBool(isOn);
+        this.setConfig(rules);
         return this.getConfig();
     }
 
@@ -165,8 +193,22 @@ class RuleEngine {
         const groups = Array.isArray(cfg.groups) ? cfg.groups : [];
         return {
             enabled: this.makeBool(cfg.enabled, true),
+            modes: this.normalizeModes(cfg.modes),
             groups: groups.map((g, i) => this.normalizeGroup(g, i))
         };
+    }
+
+    private normalizeModes(modes: any): RuleMode[] {
+        const normalized = (Array.isArray(modes) ? modes : []).map((mode, index) => {
+            const id = this.normalizeModeId(mode?.id || mode?.name || `mode-${index + 1}`);
+            return {
+                id,
+                name: typeof mode?.name === 'string' && mode.name.trim().length > 0 ? mode.name.trim() : this.modeName(id),
+                isOn: this.makeBool(mode?.isOn)
+            };
+        }).filter(mode => mode.id.length > 0);
+        if (normalized.find(m => m.id === 'party')) return normalized;
+        return [{ id: 'party', name: 'Party Mode', isOn: false }, ...normalized];
     }
 
     private normalizeGroup(group: any, index: number): RuleGroup {
@@ -211,6 +253,7 @@ class RuleEngine {
             type: action.type || 'setCircuit',
             id: typeof action.id !== 'undefined' ? parseInt(action.id, 10) : undefined,
             ids: Array.isArray(action.ids) ? action.ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : undefined,
+            targetType: action.targetType === 'circuit' ? 'circuit' : 'feature',
             pumpId: typeof action.pumpId !== 'undefined' ? parseInt(action.pumpId, 10) : undefined,
             circuitId: typeof action.circuitId !== 'undefined' ? parseInt(action.circuitId, 10) : undefined,
             speed: typeof action.speed !== 'undefined' ? parseInt(action.speed, 10) : undefined,
@@ -437,6 +480,16 @@ class RuleEngine {
             }
             return details;
         }
+        if (action.type === 'setEggTimerDisabled') {
+            try {
+                const needed = this.actionNeedsRun(group, rule, action);
+                await this.setEggTimerDisabled(action.targetType || 'feature', action.id, desired, group, rule, reason);
+                details.push(this.actionDetail(action, action.id, desired, needed ? 'ran' : 'skipped', needed ? undefined : 'Egg timer already in requested rule-owned state.'));
+            } catch (err) {
+                details.push(this.actionDetail(action, action.id, desired, 'error', err?.message || String(err)));
+            }
+            return details;
+        }
         for (const id of ids) {
             if (!id || isNaN(id)) continue;
             if (action.type === 'setCircuit') {
@@ -571,6 +624,10 @@ class RuleEngine {
         try {
             if (action.type === 'setCircuit' || action.type === 'circuitLock') return state.circuits.getInterfaceById(id).name || sys.circuits.getItemById(id).name;
             if (action.type === 'setFeature' || action.type === 'featureLock') return state.features.getItemById(id).name || sys.features.getItemById(id).name;
+            if (action.type === 'setEggTimerDisabled') {
+                if (action.targetType === 'circuit') return state.circuits.getInterfaceById(id).name;
+                return state.features.getItemById(id).name;
+            }
             if (action.type === 'setScheduleDisabled') {
                 const ssched = state.schedules.getItemById(id) as any;
                 const sched = sys.schedules.getItemById(id) as any;
@@ -612,6 +669,12 @@ class RuleEngine {
                 const entry = this.getScheduleDisableEntry(this.getRuntimeState(), id);
                 return desired ? sched.disabled !== true || entry.owners.indexOf(owner) === -1 : entry.owners.indexOf(owner) !== -1;
             }
+            if (action.type === 'setEggTimerDisabled') {
+                const owner = this.scheduleOwnerKey(group, rule);
+                const entry = this.getEggTimerOverrideEntry(this.getRuntimeState(), action.targetType || 'feature', id);
+                const target = this.getEggTimerTarget(action.targetType || 'feature', id);
+                return desired ? target?.dontStop !== true || entry.owners.indexOf(owner) === -1 : entry.owners.indexOf(owner) !== -1;
+            }
             if (action.type === 'circuitLock' || action.type === 'featureLock') {
                 const cstate = state.circuits.getInterfaceById(id);
                 return cstate.lockoutOn !== desired || cstate.lockoutOff !== desired;
@@ -651,6 +714,53 @@ class RuleEngine {
         cstate.lockoutOn = locked;
         cstate.lockoutOff = locked;
         cstate.emitEquipmentChange();
+    }
+
+    private async setEggTimerDisabled(targetType: 'circuit' | 'feature', id: number, disabled: boolean, group: RuleGroup, rule: RuleDefinition, reason: string) {
+        if (!id || isNaN(id)) throw new Error('Circuit or feature id is required.');
+        const target = this.getEggTimerTarget(targetType, id);
+        if (!target) throw new Error(`${targetType} ${id} was not found.`);
+        const owner = this.scheduleOwnerKey(group, rule);
+        const runtime = this.getRuntimeState();
+        const entry = this.getEggTimerOverrideEntry(runtime, targetType, id);
+
+        if (disabled) {
+            if (entry.owners.length === 0) {
+                entry.eggTimer = typeof target.eggTimer === 'number' ? target.eggTimer : undefined;
+                entry.dontStop = target.dontStop === true;
+            }
+            if (entry.owners.indexOf(owner) === -1) entry.owners.push(owner);
+            this.setEggTimerOverrideEntry(runtime, targetType, id, entry);
+            this.setRuntimeState(runtime);
+            if (target.dontStop === true) {
+                await config.updateAsync();
+                return;
+            }
+            logger.info(`Rule "${rule.name}" disabling egg timer for ${targetType} ${id} (${reason})`);
+            await this.saveEggTimerTarget(targetType, target, { dontStop: true });
+            await config.updateAsync();
+            return;
+        }
+
+        const ownerIndex = entry.owners.indexOf(owner);
+        if (ownerIndex === -1) {
+            logger.info(`Rule "${rule.name}" will not restore egg timer for ${targetType} ${id}; it does not own the override (${reason})`);
+            return;
+        }
+        entry.owners.splice(ownerIndex, 1);
+        this.setEggTimerOverrideEntry(runtime, targetType, id, entry);
+        this.setRuntimeState(runtime);
+        if (entry.owners.length > 0) {
+            logger.info(`Rule "${rule.name}" released egg timer for ${targetType} ${id}, but other rules still own the override (${reason})`);
+            await config.updateAsync();
+            return;
+        }
+        logger.info(`Rule "${rule.name}" restoring egg timer for ${targetType} ${id} (${reason})`);
+        await this.saveEggTimerTarget(targetType, target, {
+            eggTimer: typeof entry.eggTimer === 'number' ? entry.eggTimer : target.eggTimer,
+            dontStop: entry.dontStop === true
+        });
+        await config.updateAsync();
     }
 
     private async setScheduleDisabled(id: number, disabled: boolean, group: RuleGroup, rule: RuleDefinition, reason: string) {
@@ -711,8 +821,8 @@ class RuleEngine {
     }
 
     private getRuntimeState(): RuleRuntimeState {
-        const runtime = config.getSection('web.ruleState', { scheduleDisables: {} }) || {};
-        return { scheduleDisables: runtime.scheduleDisables || {} };
+        const runtime = config.getSection('web.ruleState', { scheduleDisables: {}, eggTimerOverrides: {} }) || {};
+        return { scheduleDisables: runtime.scheduleDisables || {}, eggTimerOverrides: runtime.eggTimerOverrides || {} };
     }
 
     private setRuntimeState(runtime: RuleRuntimeState) {
@@ -730,6 +840,39 @@ class RuleEngine {
         const owners = Array.from(new Set(entry.owners || []));
         if (owners.length === 0) delete runtime.scheduleDisables[key];
         else runtime.scheduleDisables[key] = { owners };
+    }
+
+    private getEggTimerOverrideEntry(runtime: RuleRuntimeState, targetType: 'circuit' | 'feature', id: number): EggTimerOverrideState {
+        const key = this.eggTimerOverrideKey(targetType, id);
+        const entry = runtime.eggTimerOverrides[key] || { owners: [] };
+        return {
+            owners: Array.isArray(entry.owners) ? entry.owners.slice() : [],
+            eggTimer: typeof entry.eggTimer === 'number' ? entry.eggTimer : undefined,
+            dontStop: entry.dontStop === true
+        };
+    }
+
+    private setEggTimerOverrideEntry(runtime: RuleRuntimeState, targetType: 'circuit' | 'feature', id: number, entry: EggTimerOverrideState) {
+        const key = this.eggTimerOverrideKey(targetType, id);
+        const owners = Array.from(new Set(entry.owners || []));
+        if (owners.length === 0) delete runtime.eggTimerOverrides[key];
+        else runtime.eggTimerOverrides[key] = { owners, eggTimer: entry.eggTimer, dontStop: entry.dontStop === true };
+    }
+
+    private eggTimerOverrideKey(targetType: 'circuit' | 'feature', id: number): string {
+        return `${targetType}:${id}`;
+    }
+
+    private getEggTimerTarget(targetType: 'circuit' | 'feature', id: number): any {
+        return targetType === 'circuit' ? sys.circuits.getItemById(id, false) : sys.features.getItemById(id, false);
+    }
+
+    private async saveEggTimerTarget(targetType: 'circuit' | 'feature', target: any, values: any) {
+        const data = target.get(true);
+        if (typeof values.eggTimer !== 'undefined') data.eggTimer = values.eggTimer;
+        if (typeof values.dontStop !== 'undefined') data.dontStop = values.dontStop;
+        if (targetType === 'circuit') await sys.board.circuits.setCircuitAsync(data);
+        else await sys.board.features.setFeatureAsync(data);
     }
 
     private conditionsMatch(group: RuleGroup, rule: RuleDefinition): boolean {
@@ -909,6 +1052,7 @@ class RuleEngine {
         if (typeof group.vars !== 'undefined' && typeof group.vars[value] !== 'undefined') return group.vars[value];
         if (value.indexOf('tempDelta:') === 0) return this.resolveTempDelta(group, rule, value);
         if (value.indexOf('rule:') === 0) return this.resolveRuleValue(group, rule, value);
+        if (value.indexOf('mode:') === 0) return this.resolveModeValue(value);
         const bodyId = group.bodyId || 1;
         const body = state.temps.bodies.getItemById(bodyId);
         switch (value) {
@@ -959,10 +1103,26 @@ class RuleEngine {
             case 'feature:isOn': return state.features.getItemById(id).isOn === true;
             case 'feature:runtimeMinutes': return this.equipmentRuntimeMinutes(state.features.getItemById(id));
             case 'feature:runtimeSeconds': return this.equipmentRuntimeSeconds(state.features.getItemById(id));
+            case 'pump:rpm': return state.pumps.getItemById(id).rpm;
             case 'schedule:disabled': return state.schedules.getItemById(id).disabled === true;
             case 'schedule:isOn': return state.schedules.getItemById(id).isOn === true;
             default: return value;
         }
+    }
+
+    private resolveModeValue(value: string): any {
+        const parts = value.split(':');
+        if (parts.length !== 3 || parts[2] !== 'isOn') return undefined;
+        const mode = this.getConfig().modes.find(m => m.id === this.normalizeModeId(parts[1]));
+        return mode?.isOn === true;
+    }
+
+    private normalizeModeId(value: string): string {
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+
+    private modeName(id: string): string {
+        return id.split(/[-_]+/g).filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Mode';
     }
 
     private equipmentRuntimeMinutes(equipment: any): number {
